@@ -107,19 +107,7 @@ async function handleUpload(request, env) {
     },
   });
 
-  const putResult = await env.PHOTOS_BUCKET.head(key);
-
-  return new Response(JSON.stringify({
-    ok: true,
-    key,
-    __debug: {
-      formKeys: Array.from(formData.keys()),
-      parsedGuestName: guestName,
-      parsedTakenAtRaw: takenAtRaw,
-      parsedTakenAt: takenAt,
-      writtenCustomMetadata: putResult ? putResult.customMetadata : null,
-    },
-  }), {
+  return new Response(JSON.stringify({ ok: true, key }), {
     headers: { 'content-type': 'application/json' },
   });
 }
@@ -132,7 +120,16 @@ async function handlePhotosList(request, env) {
   if (!Number.isFinite(limit) || limit <= 0) limit = 300;
   limit = Math.min(limit, 1000);
 
-  const listed = await env.PHOTOS_BUCKET.list({ prefix: 'full/', limit });
+  // R2's list() omits customMetadata (and httpMetadata) by default for
+  // performance — it must be explicitly requested via `include`, or every
+  // object comes back with an empty customMetadata object. This was the
+  // root cause of guest names / taken-at dates showing up missing in the
+  // gallery even though they were being written correctly on upload.
+  const listed = await env.PHOTOS_BUCKET.list({
+    prefix: 'full/',
+    limit,
+    include: ['customMetadata'],
+  });
 
   const items = listed.objects.map(obj => {
     const id = obj.key.replace('full/', '').replace(/\.jpg$/, '');
@@ -150,9 +147,10 @@ async function handlePhotosList(request, env) {
       takenAt: meta.takenAt || null,
       sortTime,
     };
-  }).sort((a, b) => new Date(b.sortTime) - new Date(a.sortTime));
+  // Oldest taken first, so the gallery reads chronologically top to bottom.
+  }).sort((a, b) => new Date(a.sortTime) - new Date(b.sortTime));
 
-  return new Response(JSON.stringify({ items, __debugBuild: 'namefix-probe-1' }), {
+  return new Response(JSON.stringify({ items }), {
     headers: { 'content-type': 'application/json' },
   });
 }
