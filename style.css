@@ -149,11 +149,22 @@ body {
   background: rgba(255, 255, 255, 0.15); color: #fff; font-size: 1.1rem;
   display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
+.viewer-bottom {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 20px 20px max(20px, env(safe-area-inset-bottom));
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+}
 .viewer-caption {
-  position: absolute; bottom: max(16px, env(safe-area-inset-bottom));
-  left: 0; right: 0; text-align: center; color: rgba(255, 255, 255, 0.85);
+  text-align: center; color: rgba(255, 255, 255, 0.85);
   font-size: 0.82rem; margin: 0;
 }
+.viewer-download-btn {
+  padding: 12px 28px; border-radius: 999px; border: none;
+  background: rgba(255, 255, 255, 0.16); color: #fff;
+  font-size: 0.95rem; font-weight: 600; cursor: pointer;
+}
+.viewer-download-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .viewer-nav {
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 44px; height: 44px; border-radius: 50%; border: none;

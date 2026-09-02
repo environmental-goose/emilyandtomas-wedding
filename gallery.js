@@ -129,14 +129,6 @@ function updateViewer() {
   viewerImg.src = item.fullUrl;
   viewerImg.alt = `Photo by ${item.guestName}`;
   viewerCaption.textContent = item.guestName ? `Shared by ${item.guestName}` : '';
-  viewerDownload.onclick = () => {
-    const a = document.createElement('a');
-    a.href = `${item.fullUrl}?dl=1`;
-    a.download = '';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  };
 }
 
 function goPrev() {
@@ -157,6 +149,49 @@ function goNext() {
 viewerClose.addEventListener('click', closeViewer);
 viewerPrev.addEventListener('click', goPrev);
 viewerNext.addEventListener('click', goNext);
+
+// Downloading straight to the Photos app on iPhone means going through the
+// native share sheet (Web Share API with a file) rather than a plain
+// <a download>, which on iOS Safari saves into Files instead. Desktop /
+// browsers without file-sharing support fall back to a normal download.
+viewerDownload.addEventListener('click', async () => {
+  const item = allItems[currentViewerIndex];
+  if (!item) return;
+
+  const originalLabel = viewerDownload.textContent;
+  viewerDownload.disabled = true;
+  viewerDownload.textContent = 'Preparing…';
+
+  try {
+    const res = await fetch(item.fullUrl);
+    if (!res.ok) throw new Error('fetch failed');
+    const blob = await res.blob();
+    const filename = item.originalName || `${item.id}.jpg`;
+    const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file] });
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+  } catch (e) {
+    // The user cancelling the native share sheet throws AbortError — not
+    // a real failure, so don't show an error for that case.
+    if (!e || e.name !== 'AbortError') {
+      alert('Download failed — please try again.');
+    }
+  } finally {
+    viewerDownload.disabled = false;
+    viewerDownload.textContent = originalLabel;
+  }
+});
 
 let touchStartX = 0, touchStartY = 0;
 viewerFigure.addEventListener('touchstart', e => {

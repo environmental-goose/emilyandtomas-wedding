@@ -143,6 +143,7 @@ async function handlePhotosList(request, env) {
       thumbUrl: `/photos/thumb/${id}.jpg`,
       fullUrl: `/photos/full/${id}.jpg`,
       guestName: meta.guestName || 'Anonymous',
+      originalName: meta.originalName || `${id}.jpg`,
       uploadedAt,
       takenAt: meta.takenAt || null,
       sortTime,

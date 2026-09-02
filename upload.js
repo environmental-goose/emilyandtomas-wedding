@@ -39,7 +39,7 @@ retryFailedBtn.addEventListener('click', () => {
   retryFailedBtn.hidden = true;
   modalFailNote.hidden = true;
   modalActions.hidden = true;
-  modalIcon.textContent = '⬆️';
+  modalIcon.textContent = '↑';
   modalTitle.textContent = 'Uploading photos…';
   modalWarning.hidden = false;
   runQueue();
@@ -60,7 +60,7 @@ function startBatch(files) {
 
 function openModal() {
   modal.hidden = false;
-  modalIcon.textContent = '⬆️';
+  modalIcon.textContent = '↑';
   modalTitle.textContent = 'Uploading photos…';
   modalWarning.hidden = false;
   modalFailNote.hidden = true;
@@ -85,12 +85,12 @@ function finishBatch(failedCount) {
   modalWarning.hidden = true;
   modalActions.hidden = false;
   if (failedCount === 0) {
-    modalIcon.textContent = '✅';
+    modalIcon.textContent = '✓';
     modalTitle.textContent = 'Upload complete!';
     modalFailNote.hidden = true;
     retryFailedBtn.hidden = true;
   } else {
-    modalIcon.textContent = '⚠️';
+    modalIcon.textContent = '!';
     modalTitle.textContent = 'Upload finished with issues';
     modalFailNote.hidden = false;
     modalFailNote.textContent = `${failedCount} photo${failedCount === 1 ? '' : 's'} failed to upload.`;
