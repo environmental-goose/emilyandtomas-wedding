@@ -1,18 +1,32 @@
 // Single Worker entry point.
-// Static files (index.html, gallery.html, style.css, upload.js, gallery.js)
-// are served via the ASSETS binding; everything else is handled here.
-//
-// (This replaces the old Pages-style `functions/` directory — that
-// file-based-routing convention doesn't work on a plain Cloudflare Worker,
-// which is what this project actually is. Everything now lives in this
-// one script instead.)
+// Static files are served via the ASSETS binding; everything else
+// (API routes + explicit clean-URL pages) is handled here.
 
 const MAX_BYTES = 60 * 1024 * 1024; // 60MB per part, safety net
+
+// Simple shared-password gate for the admin page. This is intentionally
+// low-tech (matches the rest of the app's no-real-auth posture) — it's a
+// deterrent, not a security boundary. NOTE: if this repo is public on
+// GitHub, this password is visible in the source. Change it here if
+// needed; it's checked against the X-Admin-Password header on every
+// admin API call, so changing it takes effect on the next deploy.
+const ADMIN_PASSWORD = 'natrocks';
+
+const PAGE_ROUTES = {
+  '/': '/index.html',
+  '/upload': '/upload.html',
+  '/gallery': '/gallery.html',
+  '/admin': '/admin.html',
+};
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
+
+    if (request.method === 'GET' && PAGE_ROUTES[pathname]) {
+      return serveAsset(env, request, PAGE_ROUTES[pathname]);
+    }
 
     if (request.method === 'POST' && pathname === '/api/upload') {
       return handleUpload(request, env);
@@ -23,10 +37,26 @@ export default {
     if (request.method === 'GET' && pathname.startsWith('/photos/')) {
       return handlePhotoServe(request, env, pathname.slice('/photos/'.length));
     }
+    if (request.method === 'GET' && pathname === '/api/admin/verify') {
+      return isAdmin(request) ? new Response('ok') : new Response('unauthorized', { status: 401 });
+    }
+    if (request.method === 'POST' && pathname === '/api/admin/delete') {
+      return handleAdminDelete(request, env);
+    }
 
     return env.ASSETS.fetch(request);
   },
 };
+
+function serveAsset(env, request, path) {
+  const assetUrl = new URL(request.url);
+  assetUrl.pathname = path;
+  return env.ASSETS.fetch(new Request(assetUrl.toString(), request));
+}
+
+function isAdmin(request) {
+  return request.headers.get('X-Admin-Password') === ADMIN_PASSWORD;
+}
 
 // POST /api/upload — streams one file (thumb or full) straight into R2.
 // No database — guest name / original filename / upload time are stored
@@ -74,16 +104,15 @@ async function handleUpload(request, env) {
   });
 }
 
-// GET /api/photos — lists everything under full/ for the gallery.
+// GET /api/photos?limit=N — lists everything under full/ for the gallery
+// (and the admin panel, which asks for a higher limit).
 async function handlePhotosList(request, env) {
   const url = new URL(request.url);
-  const cursor = url.searchParams.get('cursor') || undefined;
+  let limit = parseInt(url.searchParams.get('limit') || '300', 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 300;
+  limit = Math.min(limit, 1000);
 
-  const listed = await env.PHOTOS_BUCKET.list({
-    prefix: 'full/',
-    cursor,
-    limit: 200,
-  });
+  const listed = await env.PHOTOS_BUCKET.list({ prefix: 'full/', limit });
 
   const items = listed.objects.map(obj => {
     const id = obj.key.replace('full/', '').replace(/\.jpg$/, '');
@@ -97,10 +126,9 @@ async function handlePhotosList(request, env) {
     };
   }).sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
 
-  return new Response(JSON.stringify({
-    items,
-    cursor: listed.truncated ? listed.cursor : null,
-  }), { headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify({ items }), {
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 // GET /photos/<kind>/<id>.jpg — streams an object straight out of R2.
@@ -121,4 +149,31 @@ async function handlePhotoServe(request, env, key) {
   }
 
   return new Response(obj.body, { headers });
+}
+
+// POST /api/admin/delete — { ids: ["<id>", ...] }, password-gated.
+// Removes both the thumb/ and full/ objects for each id.
+async function handleAdminDelete(request, env) {
+  if (!isAdmin(request)) return new Response('Unauthorized', { status: 401 });
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return new Response('Bad JSON', { status: 400 });
+  }
+
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter(id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,80}$/.test(id))
+    : [];
+  if (!ids.length) return new Response('No valid ids', { status: 400 });
+
+  await Promise.all(ids.flatMap(id => [
+    env.PHOTOS_BUCKET.delete(`full/${id}.jpg`),
+    env.PHOTOS_BUCKET.delete(`thumb/${id}.jpg`),
+  ]));
+
+  return new Response(JSON.stringify({ ok: true, deleted: ids.length }), {
+    headers: { 'content-type': 'application/json' },
+  });
 }

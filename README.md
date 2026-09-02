@@ -6,12 +6,31 @@ guests, no frontend build step — plain HTML/CSS/JS.
 
 ## How it works
 
-- `index.html` / `gallery.html` / `style.css` / `upload.js` / `gallery.js`
-  — the static frontend, served directly by the Worker's assets binding.
-- `worker/index.js` — the one server-side script. Handles three routes
-  (`POST /api/upload`, `GET /api/photos`, `GET /photos/<kind>/<id>.jpg`)
-  and falls through to `env.ASSETS.fetch(request)` for everything else
-  (i.e. the static files above).
+- `index.html` — landing page with two buttons: Upload / Gallery.
+- `upload.html` + `upload.js` — the upload form (name + photo picker).
+- `gallery.html` + `gallery.js` — the live photo grid + lightbox +
+  download. Polls every 15s, pauses while the tab is hidden, and only
+  touches the DOM for photos that actually changed (added or deleted).
+- `admin.html` + `admin.js` — password-gated page at `/admin` for
+  bulk-deleting photos or downloading a selection as a `.zip`
+  (zipped client-side via `fflate`, no server-side zip work needed).
+- `style.css` — shared styling for all of the above.
+- `worker/index.js` — the one server-side script. Routes:
+  `POST /api/upload`, `GET /api/photos`, `GET /photos/<kind>/<id>.jpg`,
+  `GET /api/admin/verify`, `POST /api/admin/delete`, plus explicit
+  clean-URL routes for `/`, `/upload`, `/gallery`, `/admin`. Everything
+  else falls through to `env.ASSETS.fetch(request)` (the static files
+  above).
+
+### Admin page
+
+`/admin` is gated by a shared password (`ADMIN_PASSWORD` near the top of
+`worker/index.js`, currently `natrocks`) checked on every admin API call
+— this is a deterrent, not real security, consistent with the rest of
+the app having no guest auth either. **If this repo is public on
+GitHub, that password is visible in the source** — change it in
+`worker/index.js` if you want a different one; it takes effect on the
+next deploy.
 - `wrangler.jsonc` — declares the Worker's entry point, the assets
   directory, and the R2 bucket binding (`PHOTOS_BUCKET`). Because this
   lives in the repo, Cloudflare picks it up on every deploy — no manual

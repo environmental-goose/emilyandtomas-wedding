@@ -3,42 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Emily & Tomas — Share Your Photos</title>
+<meta name="theme-color" content="#B85C38">
+<title>Emily &amp; Tomas — Wedding Photos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header class="site-header">
-  <h1 class="couple-names">Emily <span class="amp">&amp;</span> Tomas</h1>
-  <p class="tagline">Share the photos you took today — we'd love to see the day through your eyes</p>
-  <nav class="site-nav">
-    <a href="/" class="active">Upload</a>
-    <a href="/gallery.html">Gallery</a>
-  </nav>
-</header>
-
-<main class="upload-page">
-  <section class="card">
-    <label class="field">
-      <span>Your name</span>
-      <input type="text" id="guestName" placeholder="e.g. Alex Smith" autocomplete="name">
-    </label>
-
-    <label class="dropzone" id="dropzone">
-      <input type="file" id="fileInput" accept="image/*" multiple hidden>
-      <div class="dropzone-inner">
-        <span class="dropzone-icon">📷</span>
-        <span class="dropzone-text">Tap to choose photos</span>
-        <span class="dropzone-sub">or drag them here</span>
-      </div>
-    </label>
-
-    <ul id="fileList" class="file-list"></ul>
-  </section>
+<main class="landing">
+  <div class="landing-inner">
+    <h1 class="couple-names">Emily <span class="amp">&amp;</span> Tomas</h1>
+    <p class="tagline">Thank you for celebrating with us! Share the photos you took, or browse what everyone else has shared.</p>
+    <div class="landing-actions">
+      <a class="landing-btn primary" href="/upload">
+        <span class="landing-btn-icon">📷</span>
+        <span>Upload Photos</span>
+      </a>
+      <a class="landing-btn" href="/gallery">
+        <span class="landing-btn-icon">🖼️</span>
+        <span>View Gallery</span>
+      </a>
+    </div>
+  </div>
 </main>
-
-<script src="/upload.js"></script>
 </body>
 </html>

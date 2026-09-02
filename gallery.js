@@ -10,33 +10,61 @@
   const nextBtn = document.getElementById('lightboxNext');
 
   let items = [];
+  const renderedIds = new Set();
   let currentIndex = 0;
+  let pollTimer = null;
 
-  async function load() {
+  // Fetches the current full list and reconciles the DOM incrementally —
+  // only new photos get new <img> elements, and anything deleted (via the
+  // admin page) gets removed. This avoids re-downloading/re-rendering
+  // everything already on screen every 15 seconds, which matters a lot
+  // on a mobile connection.
+  async function refresh() {
     try {
-      const res = await fetch('/api/photos');
+      const res = await fetch('/api/photos?limit=300');
       const data = await res.json();
-      items = data.items || [];
+      const fresh = data.items || [];
+      const freshIds = new Set(fresh.map(i => i.id));
+
+      renderedIds.forEach(id => {
+        if (!freshIds.has(id)) {
+          renderedIds.delete(id);
+          const el = grid.querySelector('[data-id="' + id + '"]');
+          if (el) el.remove();
+        }
+      });
+
+      const newOnes = fresh.filter(item => !renderedIds.has(item.id));
+      items = fresh;
+      if (newOnes.length) {
+        newOnes.forEach(item => renderedIds.add(item.id));
+        prependItems(newOnes);
+      }
+      emptyState.hidden = fresh.length > 0;
     } catch (e) {
-      items = [];
+      // silent — the next poll will retry
     }
-    render();
   }
 
-  function render() {
-    grid.innerHTML = '';
-    emptyState.hidden = items.length > 0;
-    items.forEach((item, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'grid-item';
-      btn.innerHTML = '<img src="' + item.thumbUrl + '" loading="lazy" alt="Photo from ' + escapeHtml(item.guestName) + '">';
-      btn.onclick = () => openLightbox(i);
-      grid.appendChild(btn);
-    });
+  function prependItems(newItems) {
+    const frag = document.createDocumentFragment();
+    newItems.forEach(item => frag.appendChild(makeGridItem(item)));
+    grid.prepend(frag);
   }
 
-  function openLightbox(i) {
-    currentIndex = i;
+  function makeGridItem(item) {
+    const btn = document.createElement('button');
+    btn.className = 'grid-item';
+    btn.dataset.id = item.id;
+    btn.innerHTML = '<img src="' + item.thumbUrl + '" loading="lazy" decoding="async" alt="Photo from ' + escapeHtml(item.guestName) + '">';
+    btn.onclick = () => openLightboxById(item.id);
+    return btn;
+  }
+
+  function openLightboxById(id) {
+    const idx = items.findIndex(i => i.id === id);
+    if (idx === -1) return;
+    currentIndex = idx;
     updateLightbox();
     lightbox.hidden = false;
   }
@@ -61,6 +89,21 @@
     return (s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  load();
-  setInterval(load, 15000);
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(refresh, 15000);
+  }
+  function stopPolling() {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  // Pause polling when the tab isn't visible — saves battery and mobile
+  // data, and picks back up (with an immediate refresh) when it returns.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopPolling();
+    else { refresh(); startPolling(); }
+  });
+
+  refresh();
+  startPolling();
 })();

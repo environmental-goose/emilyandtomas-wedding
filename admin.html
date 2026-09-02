@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#B85C38">
+<meta name="robots" content="noindex">
+<title>Admin — Emily &amp; Tomas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fflate/0.8.2/fflate.min.js"></script>
+</head>
+<body>
+<header class="site-header">
+  <a href="/" class="couple-names-link"><h1 class="couple-names">Admin</h1></a>
+  <p class="tagline">Manage uploaded photos</p>
+</header>
+
+<main class="admin-page">
+  <section id="gate" class="card gate-card">
+    <label class="field">
+      <span>Admin password</span>
+      <input type="password" id="passwordInput" autocomplete="current-password">
+    </label>
+    <button id="unlockBtn" class="primary-btn">Unlock</button>
+    <p id="gateError" class="gate-error" hidden>Incorrect password.</p>
+  </section>
+
+  <section id="adminPanel" class="admin-panel" hidden>
+    <div class="admin-toolbar">
+      <label class="select-all">
+        <input type="checkbox" id="selectAll"> Select all
+      </label>
+      <span id="selectionCount" class="selection-count">0 selected</span>
+      <div class="admin-actions">
+        <button id="downloadBtn" class="secondary-btn" disabled>Download ZIP</button>
+        <button id="deleteBtn" class="danger-btn" disabled>Delete</button>
+      </div>
+    </div>
+    <p id="adminEmpty" class="empty-state" hidden>No photos yet.</p>
+    <div id="adminGrid" class="grid admin-grid"></div>
+  </section>
+</main>
+
+<script src="/admin.js"></script>
+</body>
+</html>
