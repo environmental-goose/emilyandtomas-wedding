@@ -140,7 +140,7 @@ async function handlePhotosList(request, env) {
     };
   }).sort((a, b) => new Date(b.sortTime) - new Date(a.sortTime));
 
-  return new Response(JSON.stringify({ items }), {
+  return new Response(JSON.stringify({ items, __debugBuild: 'namefix-probe-1' }), {
     headers: { 'content-type': 'application/json' },
   });
 }
