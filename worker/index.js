@@ -107,7 +107,19 @@ async function handleUpload(request, env) {
     },
   });
 
-  return new Response(JSON.stringify({ ok: true, key }), {
+  const putResult = await env.PHOTOS_BUCKET.head(key);
+
+  return new Response(JSON.stringify({
+    ok: true,
+    key,
+    __debug: {
+      formKeys: Array.from(formData.keys()),
+      parsedGuestName: guestName,
+      parsedTakenAtRaw: takenAtRaw,
+      parsedTakenAt: takenAt,
+      writtenCustomMetadata: putResult ? putResult.customMetadata : null,
+    },
+  }), {
     headers: { 'content-type': 'application/json' },
   });
 }
