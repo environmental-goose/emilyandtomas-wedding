@@ -1,109 +1,194 @@
-(function () {
-  const grid = document.getElementById('grid');
-  const emptyState = document.getElementById('emptyState');
-  const lightbox = document.getElementById('lightbox');
-  const lightboxImg = document.getElementById('lightboxImg');
-  const lightboxCaption = document.getElementById('lightboxCaption');
-  const lightboxDownload = document.getElementById('lightboxDownload');
-  const closeBtn = document.getElementById('lightboxClose');
-  const prevBtn = document.getElementById('lightboxPrev');
-  const nextBtn = document.getElementById('lightboxNext');
+// Gallery: fetches the full (already server-sorted-by-taken-time) photo
+// list, then renders it progressively (client-side "infinite scroll") so
+// the DOM never has to hold thousands of nodes at once. Tapping a photo
+// opens a full-screen swipeable viewer.
 
-  let items = [];
-  const renderedIds = new Set();
-  let currentIndex = 0;
-  let pollTimer = null;
+const grid = document.getElementById('grid');
+const emptyState = document.getElementById('emptyState');
+const sentinel = document.getElementById('sentinel');
 
-  // Fetches the current full list and reconciles the DOM incrementally —
-  // only new photos get new <img> elements, and anything deleted (via the
-  // admin page) gets removed. This avoids re-downloading/re-rendering
-  // everything already on screen every 15 seconds, which matters a lot
-  // on a mobile connection.
-  async function refresh() {
-    try {
-      const res = await fetch('/api/photos?limit=300');
-      const data = await res.json();
-      const fresh = data.items || [];
-      const freshIds = new Set(fresh.map(i => i.id));
+const viewer = document.getElementById('viewer');
+const viewerImg = document.getElementById('viewerImg');
+const viewerCaption = document.getElementById('viewerCaption');
+const viewerFigure = document.getElementById('viewerFigure');
+const viewerClose = document.getElementById('viewerClose');
+const viewerDownload = document.getElementById('viewerDownload');
+const viewerPrev = document.getElementById('viewerPrev');
+const viewerNext = document.getElementById('viewerNext');
 
-      renderedIds.forEach(id => {
-        if (!freshIds.has(id)) {
-          renderedIds.delete(id);
-          const el = grid.querySelector('[data-id="' + id + '"]');
-          if (el) el.remove();
-        }
-      });
+const BATCH = 30;
+const POLL_MS = 5000;
 
-      const newOnes = fresh.filter(item => !renderedIds.has(item.id));
-      items = fresh;
-      if (newOnes.length) {
-        newOnes.forEach(item => renderedIds.add(item.id));
-        prependItems(newOnes);
-      }
-      emptyState.hidden = fresh.length > 0;
-    } catch (e) {
-      // silent — the next poll will retry
-    }
+let allItems = [];
+let renderedCount = 0;
+let renderedIds = [];
+let currentViewerIndex = -1;
+let pollTimer = null;
+
+async function fetchItems() {
+  const res = await fetch('/api/photos?limit=1000');
+  if (!res.ok) throw new Error('failed to fetch photos');
+  const data = await res.json();
+  return data.items || [];
+}
+
+function idsOf(items) {
+  return items.map(i => i.id);
+}
+
+function sameSequence(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+async function refresh() {
+  let items;
+  try {
+    items = await fetchItems();
+  } catch (e) {
+    return;
   }
+  allItems = items;
+  emptyState.hidden = allItems.length > 0;
 
-  function prependItems(newItems) {
-    const frag = document.createDocumentFragment();
-    newItems.forEach(item => frag.appendChild(makeGridItem(item)));
-    grid.prepend(frag);
-  }
+  const targetCount = Math.min(Math.max(renderedCount, BATCH), allItems.length);
+  const newSlice = allItems.slice(0, targetCount);
+  const newIds = idsOf(newSlice);
 
-  function makeGridItem(item) {
-    const btn = document.createElement('button');
-    btn.className = 'grid-item';
-    btn.dataset.id = item.id;
-    btn.innerHTML = '<img src="' + item.thumbUrl + '" loading="lazy" decoding="async" alt="Photo from ' + escapeHtml(item.guestName) + '">';
-    btn.onclick = () => openLightboxById(item.id);
-    return btn;
+  if (!sameSequence(newIds, renderedIds)) {
+    renderedCount = targetCount;
+    renderedIds = newIds;
+    renderSlice();
   }
+}
 
-  function openLightboxById(id) {
-    const idx = items.findIndex(i => i.id === id);
-    if (idx === -1) return;
-    currentIndex = idx;
-    updateLightbox();
-    lightbox.hidden = false;
-  }
-  function updateLightbox() {
-    const item = items[currentIndex];
-    lightboxImg.src = item.fullUrl;
-    lightboxCaption.textContent = 'Uploaded by ' + item.guestName;
-    lightboxDownload.href = item.fullUrl + '?dl=1';
-  }
-  closeBtn.onclick = () => { lightbox.hidden = true; };
-  prevBtn.onclick = () => { currentIndex = (currentIndex - 1 + items.length) % items.length; updateLightbox(); };
-  nextBtn.onclick = () => { currentIndex = (currentIndex + 1) % items.length; updateLightbox(); };
-  lightbox.addEventListener('click', e => { if (e.target === lightbox) lightbox.hidden = true; });
-  document.addEventListener('keydown', e => {
-    if (lightbox.hidden) return;
-    if (e.key === 'Escape') lightbox.hidden = true;
-    if (e.key === 'ArrowLeft') prevBtn.onclick();
-    if (e.key === 'ArrowRight') nextBtn.onclick();
+function renderSlice() {
+  grid.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  allItems.slice(0, renderedCount).forEach((item, index) => {
+    frag.appendChild(makeGridItem(item, index));
   });
+  grid.appendChild(frag);
+}
 
-  function escapeHtml(s) {
-    return (s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function appendSlice(fromIndex, toIndex) {
+  const frag = document.createDocumentFragment();
+  for (let i = fromIndex; i < toIndex; i++) {
+    frag.appendChild(makeGridItem(allItems[i], i));
   }
+  grid.appendChild(frag);
+  renderedIds = idsOf(allItems.slice(0, renderedCount));
+}
 
-  function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(refresh, 15000);
-  }
-  function stopPolling() {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  // Pause polling when the tab isn't visible — saves battery and mobile
-  // data, and picks back up (with an immediate refresh) when it returns.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopPolling();
-    else { refresh(); startPolling(); }
-  });
+function makeGridItem(item, index) {
+  const btn = document.createElement('button');
+  btn.className = 'grid-item';
+  btn.type = 'button';
+  btn.setAttribute('aria-label', `Photo by ${item.guestName}`);
+  const img = document.createElement('img');
+  img.src = item.thumbUrl;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.alt = '';
+  btn.appendChild(img);
+  btn.addEventListener('click', () => openViewer(index));
+  return btn;
+}
 
-  refresh();
-  startPolling();
-})();
+function loadMore() {
+  if (renderedCount >= allItems.length) return;
+  const from = renderedCount;
+  const to = Math.min(renderedCount + BATCH, allItems.length);
+  renderedCount = to;
+  appendSlice(from, to);
+}
+
+const observer = new IntersectionObserver(entries => {
+  if (entries.some(e => e.isIntersecting)) loadMore();
+}, { rootMargin: '600px' });
+observer.observe(sentinel);
+
+// ---- full-screen viewer ----
+
+function openViewer(index) {
+  currentViewerIndex = index;
+  updateViewer();
+  viewer.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+
+function closeViewer() {
+  viewer.hidden = true;
+  document.body.style.overflow = '';
+}
+
+function updateViewer() {
+  const item = allItems[currentViewerIndex];
+  if (!item) return;
+  viewerImg.src = item.fullUrl;
+  viewerImg.alt = `Photo by ${item.guestName}`;
+  viewerCaption.textContent = item.guestName ? `Shared by ${item.guestName}` : '';
+  viewerDownload.onclick = () => {
+    const a = document.createElement('a');
+    a.href = `${item.fullUrl}?dl=1`;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+}
+
+function goPrev() {
+  if (currentViewerIndex > 0) {
+    currentViewerIndex--;
+    updateViewer();
+  }
+}
+
+function goNext() {
+  if (currentViewerIndex < allItems.length - 1) {
+    currentViewerIndex++;
+    updateViewer();
+    if (currentViewerIndex >= renderedCount - 5) loadMore();
+  }
+}
+
+viewerClose.addEventListener('click', closeViewer);
+viewerPrev.addEventListener('click', goPrev);
+viewerNext.addEventListener('click', goNext);
+
+let touchStartX = 0, touchStartY = 0;
+viewerFigure.addEventListener('touchstart', e => {
+  const t = e.changedTouches[0];
+  touchStartX = t.clientX;
+  touchStartY = t.clientY;
+}, { passive: true });
+
+viewerFigure.addEventListener('touchend', e => {
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchStartX;
+  const dy = t.clientY - touchStartY;
+  if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+    if (dx < 0) goNext();
+    else goPrev();
+  }
+}, { passive: true });
+
+// ---- visibility-aware polling ----
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(refresh, POLL_MS);
+}
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopPolling();
+  else { refresh(); startPolling(); }
+});
+
+refresh();
+startPolling();

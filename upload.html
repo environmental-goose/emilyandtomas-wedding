@@ -2,43 +2,51 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#B85C38">
 <title>Emily &amp; Tomas — Upload Photos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/exifr/dist/lite.umd.js"></script>
 </head>
 <body>
-<header class="site-header">
-  <a href="/" class="couple-names-link"><h1 class="couple-names">Emily <span class="amp">&amp;</span> Tomas</h1></a>
-  <p class="tagline">Share the photos you took today — we'd love to see the day through your eyes</p>
-  <nav class="site-nav">
-    <a href="/upload" class="active">Upload</a>
-    <a href="/gallery">Gallery</a>
-  </nav>
+<header class="topbar">
+  <a href="/" class="back-btn" aria-label="Back">‹</a>
+  <h1 class="topbar-title">Upload Photos</h1>
 </header>
 
-<main class="upload-page">
+<main class="page-content">
   <section class="card">
     <label class="field">
       <span>Your name</span>
       <input type="text" id="guestName" placeholder="e.g. Alex Smith" autocomplete="name">
     </label>
 
-    <label class="dropzone" id="dropzone">
-      <input type="file" id="fileInput" accept="image/*" multiple hidden>
-      <div class="dropzone-inner">
-        <span class="dropzone-icon">📷</span>
-        <span class="dropzone-text">Tap to choose photos</span>
-        <span class="dropzone-sub">or drag them here</span>
-      </div>
-    </label>
-
-    <ul id="fileList" class="file-list"></ul>
+    <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    <button type="button" id="chooseBtn" class="cta-btn">
+      <span class="cta-icon">📷</span> Choose Photos
+    </button>
   </section>
 </main>
+
+<div id="uploadModal" class="modal-backdrop" hidden>
+  <div class="modal-card">
+    <div class="modal-icon" id="modalIcon">⬆️</div>
+    <h2 id="modalTitle">Uploading photos…</h2>
+    <p class="modal-sub" id="modalSub">0 of 0 uploaded</p>
+    <p class="modal-warning" id="modalWarning">Please don't leave this page until uploading is complete.</p>
+    <div class="modal-progress-track">
+      <div class="modal-progress-fill" id="modalProgressFill"></div>
+    </div>
+    <p class="modal-fail-note" id="modalFailNote" hidden></p>
+    <div class="modal-actions" id="modalActions" hidden>
+      <a href="/gallery" class="cta-btn">View Gallery</a>
+      <button type="button" id="retryFailedBtn" class="secondary-btn" hidden>Retry failed</button>
+    </div>
+  </div>
+</div>
 
 <script src="/upload.js"></script>
 </body>

@@ -1,139 +1,214 @@
-(function () {
-  const MAX_CONCURRENT = 3;
-  const MAX_FILE_BYTES = 60 * 1024 * 1024; // 60MB safety cap
+// Task-based batch upload: pick photos, they start uploading immediately,
+// progress shown in a modal popup. Each photo uploads as a thumb (client-
+// resized JPEG) + the full-res original. EXIF DateTimeOriginal is read
+// client-side (when available) and sent along so the gallery can sort by
+// when the photo was actually taken, not when it was uploaded.
 
-  const fileInput = document.getElementById('fileInput');
-  const dropzone = document.getElementById('dropzone');
-  const fileListEl = document.getElementById('fileList');
-  const guestNameInput = document.getElementById('guestName');
+const guestNameInput = document.getElementById('guestName');
+const chooseBtn = document.getElementById('chooseBtn');
+const fileInput = document.getElementById('fileInput');
 
-  function getGuestName() {
-    const v = guestNameInput.value.trim();
-    return v || 'Anonymous';
+const modal = document.getElementById('uploadModal');
+const modalIcon = document.getElementById('modalIcon');
+const modalTitle = document.getElementById('modalTitle');
+const modalSub = document.getElementById('modalSub');
+const modalWarning = document.getElementById('modalWarning');
+const modalProgressFill = document.getElementById('modalProgressFill');
+const modalFailNote = document.getElementById('modalFailNote');
+const modalActions = document.getElementById('modalActions');
+const retryFailedBtn = document.getElementById('retryFailedBtn');
+
+const MAX_CONCURRENT = 3;
+const THUMB_MAX_DIM = 480;
+const THUMB_QUALITY = 0.82;
+
+let tasks = [];
+let activeCount = 0;
+
+chooseBtn.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+  const files = Array.from(fileInput.files || []);
+  fileInput.value = '';
+  if (!files.length) return;
+  startBatch(files);
+});
+
+retryFailedBtn.addEventListener('click', () => {
+  tasks.forEach(t => { if (t.status === 'failed') { t.status = 'pending'; t.retried = false; t.progress = 0; } });
+  retryFailedBtn.hidden = true;
+  modalFailNote.hidden = true;
+  modalActions.hidden = true;
+  modalIcon.textContent = '⬆️';
+  modalTitle.textContent = 'Uploading photos…';
+  modalWarning.hidden = false;
+  runQueue();
+});
+
+function startBatch(files) {
+  tasks = files.map((file, i) => ({
+    file,
+    id: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+    progress: 0,
+    status: 'pending', // pending | uploading | done | failed
+    retried: false,
+  }));
+  activeCount = 0;
+  openModal();
+  runQueue();
+}
+
+function openModal() {
+  modal.hidden = false;
+  modalIcon.textContent = '⬆️';
+  modalTitle.textContent = 'Uploading photos…';
+  modalWarning.hidden = false;
+  modalFailNote.hidden = true;
+  modalActions.hidden = true;
+  retryFailedBtn.hidden = true;
+  updateProgress();
+}
+
+function updateProgress() {
+  const total = tasks.length;
+  const done = tasks.filter(t => t.status === 'done' || t.status === 'failed').length;
+  const overall = total ? tasks.reduce((sum, t) => sum + t.progress, 0) / total : 0;
+  modalProgressFill.style.width = `${Math.round(overall * 100)}%`;
+  modalSub.textContent = `${done} of ${total} uploaded`;
+
+  if (done === total && total > 0) {
+    finishBatch(tasks.filter(t => t.status === 'failed').length);
   }
+}
 
-  fileInput.addEventListener('change', () => handleFiles(fileInput.files));
-  ['dragover'].forEach(evt => dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add('dragover'); }));
-  ['dragleave', 'drop'].forEach(evt => dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove('dragover'); }));
-  dropzone.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files); });
+function finishBatch(failedCount) {
+  modalWarning.hidden = true;
+  modalActions.hidden = false;
+  if (failedCount === 0) {
+    modalIcon.textContent = '✅';
+    modalTitle.textContent = 'Upload complete!';
+    modalFailNote.hidden = true;
+    retryFailedBtn.hidden = true;
+  } else {
+    modalIcon.textContent = '⚠️';
+    modalTitle.textContent = 'Upload finished with issues';
+    modalFailNote.hidden = false;
+    modalFailNote.textContent = `${failedCount} photo${failedCount === 1 ? '' : 's'} failed to upload.`;
+    retryFailedBtn.hidden = false;
+  }
+}
 
-  let queue = [];
-  let running = 0;
+function runQueue() {
+  while (activeCount < MAX_CONCURRENT) {
+    const next = tasks.find(t => t.status === 'pending');
+    if (!next) break;
+    next.status = 'uploading';
+    activeCount++;
+    runTask(next).finally(() => {
+      activeCount--;
+      updateProgress();
+      runQueue();
+    });
+  }
+}
 
-  function handleFiles(fileListObj) {
-    const files = Array.from(fileListObj).filter(f => f.type.startsWith('image/'));
-    files.forEach(file => {
-      if (file.size > MAX_FILE_BYTES) {
-        addRow(file, { skip: true, reason: 'Too large (60MB max)' });
+async function readTakenAt(file) {
+  try {
+    if (window.exifr) {
+      const exif = await window.exifr.parse(file, ['DateTimeOriginal']);
+      if (exif && exif.DateTimeOriginal instanceof Date && !isNaN(exif.DateTimeOriginal)) {
+        return exif.DateTimeOriginal.toISOString();
+      }
+    }
+  } catch (e) {
+    // EXIF read failure is non-fatal — just skip takenAt.
+  }
+  return '';
+}
+
+async function uploadOnce(task, guestName) {
+  const takenAt = await readTakenAt(task.file);
+  const thumbBlob = await makeThumbnail(task.file);
+
+  await uploadPart('thumb', thumbBlob, task.id, guestName, task.file.name, takenAt, frac => {
+    task.progress = frac * 0.35;
+    updateProgress();
+  });
+  await uploadPart('full', task.file, task.id, guestName, task.file.name, takenAt, frac => {
+    task.progress = 0.35 + frac * 0.65;
+    updateProgress();
+  });
+}
+
+async function runTask(task) {
+  const guestName = (guestNameInput.value || 'Anonymous').trim() || 'Anonymous';
+  try {
+    await uploadOnce(task, guestName);
+    task.progress = 1;
+    task.status = 'done';
+  } catch (e) {
+    if (!task.retried) {
+      task.retried = true;
+      task.progress = 0;
+      try {
+        await uploadOnce(task, guestName);
+        task.progress = 1;
+        task.status = 'done';
         return;
+      } catch (e2) {
+        // fall through to failed
       }
-      const id = crypto.randomUUID();
-      const row = addRow(file, { id });
-      queue.push({ id, file, row });
-    });
-    fileInput.value = '';
-    pump();
-  }
-
-  function addRow(file, { id, skip, reason } = {}) {
-    const li = document.createElement('li');
-    li.className = 'file-row';
-    li.dataset.id = id || '';
-    li.innerHTML =
-      '<img class="file-thumb" alt="">' +
-      '<div class="file-info">' +
-        '<div class="file-name">' + escapeHtml(file.name) + '</div>' +
-        '<div class="progress-track"><div class="progress-fill"></div></div>' +
-      '</div>' +
-      '<div class="file-status">' + (skip ? reason : 'Queued') + '</div>';
-    fileListEl.prepend(li);
-    if (!skip) {
-      const img = li.querySelector('.file-thumb');
-      const url = URL.createObjectURL(file);
-      img.src = url;
-      img.onload = () => URL.revokeObjectURL(url);
-    } else {
-      li.querySelector('.file-status').classList.add('error');
     }
-    return li;
+    task.status = 'failed';
+    task.progress = 1;
   }
+}
 
-  function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
+function makeThumbnail(file) {
+  return new Promise((resolve, reject) => {
+    createImageBitmap(file, { imageOrientation: 'from-image' })
+      .then(bitmap => {
+        const scale = Math.min(1, THUMB_MAX_DIM / Math.max(bitmap.width, bitmap.height));
+        const w = Math.max(1, Math.round(bitmap.width * scale));
+        const h = Math.max(1, Math.round(bitmap.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        canvas.toBlob(blob => {
+          if (blob) resolve(blob);
+          else reject(new Error('thumbnail encode failed'));
+        }, 'image/jpeg', THUMB_QUALITY);
+      })
+      .catch(reject);
+  });
+}
 
-  function pump() {
-    while (running < MAX_CONCURRENT && queue.length) {
-      const task = queue.shift();
-      running++;
-      runTask(task).finally(() => { running--; pump(); });
-    }
-  }
+function uploadPart(kind, blob, id, guestName, originalName, takenAt, onProgress) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('kind', kind);
+    formData.append('id', id);
+    formData.append('guestName', guestName);
+    formData.append('originalName', originalName);
+    if (takenAt) formData.append('takenAt', takenAt);
+    formData.append('file', blob, kind === 'thumb' ? 'thumb.jpg' : (originalName || 'photo.jpg'));
 
-  async function runTask({ id, file, row }, isRetry = false) {
-    const statusEl = row.querySelector('.file-status');
-    const fillEl = row.querySelector('.progress-fill');
-    const guestName = getGuestName();
-    statusEl.classList.remove('error');
-    statusEl.textContent = isRetry ? 'Retrying…' : 'Preparing…';
-
-    try {
-      const thumbBlob = await makeThumbnail(file).catch(() => null);
-      statusEl.textContent = 'Uploading…';
-
-      await uploadPart('thumb', thumbBlob || file, id, guestName, file.name);
-      await uploadPart('full', file, id, guestName, file.name, pct => {
-        fillEl.style.width = Math.round(pct * 100) + '%';
-      });
-
-      fillEl.style.width = '100%';
-      statusEl.textContent = 'Done ✓';
-    } catch (err) {
-      if (!isRetry) {
-        return runTask({ id, file, row }, true);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(1);
+        resolve();
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status}`));
       }
-      statusEl.textContent = 'Failed — ';
-      statusEl.classList.add('error');
-      const retryBtn = document.createElement('button');
-      retryBtn.className = 'retry-btn';
-      retryBtn.textContent = 'Retry';
-      retryBtn.onclick = () => {
-        retryBtn.remove();
-        queue.push({ id, file, row });
-        pump();
-      };
-      statusEl.appendChild(retryBtn);
-    }
-  }
-
-  async function makeThumbnail(file, maxDim = 480, quality = 0.82) {
-    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
-    const w = Math.max(1, Math.round(bitmap.width * scale));
-    const h = Math.max(1, Math.round(bitmap.height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-    return await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
-  }
-
-  function uploadPart(kind, blob, id, guestName, originalName, onProgress) {
-    return new Promise((resolve, reject) => {
-      const fd = new FormData();
-      fd.append('kind', kind);
-      fd.append('id', id);
-      fd.append('guestName', guestName);
-      fd.append('originalName', originalName);
-      fd.append('file', blob, kind + '.jpg');
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload');
-      xhr.upload.onprogress = e => {
-        if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
-      };
-      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error('HTTP ' + xhr.status));
-      xhr.onerror = () => reject(new Error('network error'));
-      xhr.send(fd);
-    });
-  }
-})();
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(formData);
+  });
+}

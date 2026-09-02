@@ -75,6 +75,13 @@ async function handleUpload(request, env) {
   const originalName = (formData.get('originalName') || '').toString().slice(0, 200);
   const file = formData.get('file');
 
+  // Optional EXIF "photo taken at" timestamp, read client-side. Only kept
+  // if it parses as a real date — this is what the gallery sorts by so
+  // photos appear in the order they were actually taken, not uploaded.
+  const takenAtRaw = (formData.get('takenAt') || '').toString();
+  const takenAtDate = takenAtRaw ? new Date(takenAtRaw) : null;
+  const takenAt = takenAtDate && !isNaN(takenAtDate) ? takenAtDate.toISOString() : '';
+
   if (!file || typeof file === 'string') {
     return new Response('Missing file', { status: 400 });
   }
@@ -96,6 +103,7 @@ async function handleUpload(request, env) {
       guestName,
       originalName,
       uploadedAt: new Date().toISOString(),
+      ...(takenAt ? { takenAt } : {}),
     },
   });
 
@@ -117,14 +125,20 @@ async function handlePhotosList(request, env) {
   const items = listed.objects.map(obj => {
     const id = obj.key.replace('full/', '').replace(/\.jpg$/, '');
     const meta = obj.customMetadata || {};
+    const uploadedAt = meta.uploadedAt || obj.uploaded;
+    // Sort by when the photo was actually taken (EXIF), falling back to
+    // upload time for photos with no usable EXIF data.
+    const sortTime = meta.takenAt || uploadedAt;
     return {
       id,
       thumbUrl: `/photos/thumb/${id}.jpg`,
       fullUrl: `/photos/full/${id}.jpg`,
       guestName: meta.guestName || 'Anonymous',
-      uploadedAt: meta.uploadedAt || obj.uploaded,
+      uploadedAt,
+      takenAt: meta.takenAt || null,
+      sortTime,
     };
-  }).sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  }).sort((a, b) => new Date(b.sortTime) - new Date(a.sortTime));
 
   return new Response(JSON.stringify({ items }), {
     headers: { 'content-type': 'application/json' },

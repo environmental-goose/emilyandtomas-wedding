@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#B85C38">
 <title>Emily &amp; Tomas — Photo Gallery</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,29 +11,28 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header class="site-header">
-  <a href="/" class="couple-names-link"><h1 class="couple-names">Emily <span class="amp">&amp;</span> Tomas</h1></a>
-  <p class="tagline">Every photo our guests have shared, in one place</p>
-  <nav class="site-nav">
-    <a href="/upload">Upload</a>
-    <a href="/gallery" class="active">Gallery</a>
-  </nav>
+<header class="topbar">
+  <a href="/" class="back-btn" aria-label="Back">‹</a>
+  <h1 class="topbar-title">Gallery</h1>
 </header>
 
-<main class="gallery-page">
+<main class="gallery-content">
   <p id="emptyState" class="empty-state" hidden>No photos yet — be the first to share one!</p>
   <div id="grid" class="grid"></div>
+  <div id="sentinel" class="grid-sentinel"></div>
 </main>
 
-<div id="lightbox" class="lightbox" hidden>
-  <button class="lightbox-close" id="lightboxClose" aria-label="Close">✕</button>
-  <button class="lightbox-nav prev" id="lightboxPrev" aria-label="Previous">‹</button>
-  <figure class="lightbox-figure">
-    <img id="lightboxImg" alt="">
-    <figcaption id="lightboxCaption"></figcaption>
+<div id="viewer" class="viewer" hidden>
+  <div class="viewer-topbar">
+    <button class="viewer-icon-btn" id="viewerClose" aria-label="Close">✕</button>
+    <button class="viewer-icon-btn" id="viewerDownload" aria-label="Download">⬇</button>
+  </div>
+  <button class="viewer-nav prev" id="viewerPrev" aria-label="Previous">‹</button>
+  <figure class="viewer-figure" id="viewerFigure">
+    <img id="viewerImg" alt="">
   </figure>
-  <button class="lightbox-nav next" id="lightboxNext" aria-label="Next">›</button>
-  <a id="lightboxDownload" class="lightbox-download" download>Download</a>
+  <button class="viewer-nav next" id="viewerNext" aria-label="Next">›</button>
+  <p class="viewer-caption" id="viewerCaption"></p>
 </div>
 
 <script src="/gallery.js"></script>
