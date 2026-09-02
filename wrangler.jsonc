@@ -1,0 +1,12 @@
+{
+  "name": "emilyandtomas-wedding",
+  "compatibility_date": "2026-08-31",
+  "main": "worker/index.js",
+  "assets": {
+    "directory": "./",
+    "binding": "ASSETS"
+  },
+  "r2_buckets": [
+    { "binding": "PHOTOS_BUCKET", "bucket_name": "emilyandtomas-wedding-photos" }
+  ]
+}
