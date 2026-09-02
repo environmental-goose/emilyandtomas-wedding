@@ -27,10 +27,10 @@ accounts for guests, no build step for the frontend — plain HTML/CSS/JS.
 2. **Create the Pages project** — Cloudflare dashboard → Workers & Pages →
    Create → Pages → connect this GitHub repo. Build settings: no build
    command needed, output directory `/` (root) — it's all static files.
-3. **Bind the bucket** — in the Pages project → Settings → Functions → R2
-   bucket bindings → add a binding named exactly `PHOTOS_BUCKET` pointing
-   at the bucket from step 1. (Must match the binding name used in the
-   `functions/*.js` files.)
+3. **Bind the bucket** — in the Pages project → Settings → Bindings →
+   Add → R2 bucket → variable name exactly `PHOTOS_BUCKET`, pointing at
+   the bucket from step 1. (Must match the binding name used in the
+   `functions/*.js` files.) Redeploy after adding it.
 4. **Custom domain** — Pages project → Custom domains → add
    `emilyandtomas.natberman.com`. Since natberman.com's DNS is already on
    Cloudflare, this just needs the CNAME Cloudflare proposes to be
