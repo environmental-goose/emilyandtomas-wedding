@@ -112,6 +112,10 @@ function runQueue() {
   }
 }
 
+function isVideoFile(file) {
+  return !!(file.type && file.type.startsWith('video/'));
+}
+
 async function readTakenAt(file) {
   try {
     if (window.exifr) {
@@ -126,9 +130,29 @@ async function readTakenAt(file) {
   return '';
 }
 
+// Videos don't carry EXIF DateTimeOriginal, so fall back to the file's
+// own last-modified time (usually close to when it was actually shot) —
+// better than defaulting straight to upload time for sort purposes.
+function fileLastModifiedIso(file) {
+  if (!file.lastModified) return '';
+  const d = new Date(file.lastModified);
+  return isNaN(d) ? '' : d.toISOString();
+}
+
 async function uploadOnce(task, guestName) {
-  const takenAt = await readTakenAt(task.file);
-  const thumbBlob = await makeThumbnail(task.file);
+  const video = isVideoFile(task.file);
+  const takenAt = video ? fileLastModifiedIso(task.file) : await readTakenAt(task.file);
+
+  let thumbBlob;
+  if (video) {
+    try {
+      thumbBlob = await makeVideoThumbnail(task.file);
+    } catch (e) {
+      thumbBlob = await makeVideoFallbackThumbnail();
+    }
+  } else {
+    thumbBlob = await makeThumbnail(task.file);
+  }
 
   await uploadPart('thumb', thumbBlob, task.id, guestName, task.file.name, takenAt, frac => {
     task.progress = frac * 0.35;
@@ -182,6 +206,91 @@ function makeThumbnail(file) {
         }, 'image/jpeg', THUMB_QUALITY);
       })
       .catch(reject);
+  });
+}
+
+// Video thumbnail: decode a frame a moment into the clip (frame 0 is
+// sometimes black/undecoded) via a hidden <video> element, then draw it
+// to canvas exactly like the photo thumbnail path. Bounded by a timeout
+// since seek/decode timing is inconsistent across browsers — on any
+// failure the caller falls back to makeVideoFallbackThumbnail so the
+// gallery always has something to show.
+function makeVideoThumbnail(file) {
+  return new Promise((resolve, reject) => {
+    const videoEl = document.createElement('video');
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    videoEl.preload = 'metadata';
+    const objectUrl = URL.createObjectURL(file);
+    let settled = false;
+
+    const finish = (err, blob) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(objectUrl);
+      videoEl.remove();
+      if (err) reject(err); else resolve(blob);
+    };
+
+    const timer = setTimeout(() => finish(new Error('video thumbnail timed out')), 8000);
+
+    videoEl.addEventListener('loadeddata', () => {
+      try {
+        videoEl.currentTime = Math.min(0.2, (videoEl.duration || 1) / 2);
+      } catch (e) {
+        finish(e);
+      }
+    });
+    videoEl.addEventListener('seeked', () => {
+      try {
+        const w = videoEl.videoWidth || THUMB_MAX_DIM;
+        const h = videoEl.videoHeight || THUMB_MAX_DIM;
+        const scale = Math.min(1, THUMB_MAX_DIM / Math.max(w, h));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w * scale));
+        canvas.height = Math.max(1, Math.round(h * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+          if (blob) finish(null, blob);
+          else finish(new Error('video frame encode failed'));
+        }, 'image/jpeg', THUMB_QUALITY);
+      } catch (e) {
+        finish(e);
+      }
+    });
+    videoEl.addEventListener('error', () => finish(new Error('video load error')));
+
+    videoEl.src = objectUrl;
+  });
+}
+
+// Generic placeholder (dark tile + play glyph) used when a real video
+// frame can't be captured — keeps the gallery grid consistent instead of
+// leaving a broken thumbnail.
+function makeVideoFallbackThumbnail() {
+  return new Promise(resolve => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 320;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#2E241C';
+    ctx.fillRect(0, 0, 320, 320);
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(160, 160, 46, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#2E241C';
+    ctx.beginPath();
+    ctx.moveTo(146, 138);
+    ctx.lineTo(146, 182);
+    ctx.lineTo(186, 160);
+    ctx.closePath();
+    ctx.fill();
+    canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.8);
   });
 }
 

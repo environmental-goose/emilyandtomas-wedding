@@ -2,7 +2,29 @@
 // Static files are served via the ASSETS binding; everything else
 // (API routes + explicit clean-URL pages) is handled here.
 
-const MAX_BYTES = 60 * 1024 * 1024; // 60MB per part, safety net
+// Per-part size ceiling. Raised from the original 60MB (photo-only) to
+// accommodate video clips. NOTE: this is an app-level check only — the
+// Cloudflare Workers platform itself enforces its own request body size
+// cap (commonly 100MB on Free/Pro plans, higher on Business/Enterprise),
+// which can reject a request before this check even runs. If longer
+// videos start failing to upload, that platform ceiling — not this
+// constant — is almost certainly why.
+const MAX_BYTES = 200 * 1024 * 1024; // 200MB per part, safety net
+
+// Maps a file's MIME type to a reasonable storage extension. Thumbnails
+// are always a canvas-generated JPEG regardless of source type, so they
+// don't need this — only the 'full' object's key uses it.
+const EXT_BY_MIME = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+  'image/heic': 'heic', 'image/heif': 'heif', 'image/gif': 'gif',
+  'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm',
+  'video/x-m4v': 'm4v', 'video/3gpp': '3gp',
+};
+function extForMime(mime) {
+  if (mime && EXT_BY_MIME[mime]) return EXT_BY_MIME[mime];
+  if (mime && mime.startsWith('video/')) return 'mp4';
+  return 'jpg';
+}
 
 // Simple shared-password gate for the admin page. This is intentionally
 // low-tech (matches the rest of the app's no-real-auth posture) — it's a
@@ -95,14 +117,22 @@ async function handleUpload(request, env) {
     return new Response('File too large', { status: 413 });
   }
 
-  const key = `${kind}/${id}.jpg`;
+  // Thumbnails are always a canvas-generated JPEG. The full-res object
+  // keeps its real extension so videos don't end up misleadingly named
+  // "<id>.jpg" internally, and so mediaType below reflects reality.
+  const contentType = file.type || 'image/jpeg';
+  const isVideo = contentType.startsWith('video/');
+  const ext = kind === 'thumb' ? 'jpg' : extForMime(contentType);
+  const key = `${kind}/${id}.${ext}`;
 
   await env.PHOTOS_BUCKET.put(key, file.stream(), {
-    httpMetadata: { contentType: file.type || 'image/jpeg' },
+    httpMetadata: { contentType },
     customMetadata: {
       guestName,
       originalName,
       uploadedAt: new Date().toISOString(),
+      contentType,
+      mediaType: isVideo ? 'video' : 'photo',
       ...(takenAt ? { takenAt } : {}),
     },
   });
@@ -132,18 +162,24 @@ async function handlePhotosList(request, env) {
   });
 
   const items = listed.objects.map(obj => {
-    const id = obj.key.replace('full/', '').replace(/\.jpg$/, '');
+    // Full-res keys can now carry any extension (jpg/mp4/mov/...), so
+    // strip whatever the last extension is rather than assuming .jpg.
+    const id = obj.key.slice('full/'.length).replace(/\.[a-zA-Z0-9]+$/, '');
     const meta = obj.customMetadata || {};
     const uploadedAt = meta.uploadedAt || obj.uploaded;
-    // Sort by when the photo was actually taken (EXIF), falling back to
-    // upload time for photos with no usable EXIF data.
+    // Sort by when the photo/video was actually taken (EXIF for photos,
+    // the file's own last-modified time for videos), falling back to
+    // upload time when neither is available.
     const sortTime = meta.takenAt || uploadedAt;
     return {
       id,
       thumbUrl: `/photos/thumb/${id}.jpg`,
-      fullUrl: `/photos/full/${id}.jpg`,
+      // Use the real stored key so the extension always matches what's
+      // actually in the bucket (thumb is always .jpg; full varies).
+      fullUrl: `/photos/${obj.key}`,
       guestName: meta.guestName || 'Anonymous',
       originalName: meta.originalName || `${id}.jpg`,
+      isVideo: meta.mediaType === 'video',
       uploadedAt,
       takenAt: meta.takenAt || null,
       sortTime,
@@ -193,10 +229,18 @@ async function handleAdminDelete(request, env) {
     : [];
   if (!ids.length) return new Response('No valid ids', { status: 400 });
 
-  await Promise.all(ids.flatMap(id => [
-    env.PHOTOS_BUCKET.delete(`full/${id}.jpg`),
-    env.PHOTOS_BUCKET.delete(`thumb/${id}.jpg`),
-  ]));
+  // Full-res keys no longer always end in .jpg (videos keep their real
+  // extension), so find each id's actual key by prefix instead of
+  // guessing the extension — guessing wrong means R2's delete() just
+  // silently no-ops on a key that doesn't exist, leaking storage.
+  await Promise.all(ids.map(async id => {
+    const [fullListed, thumbListed] = await Promise.all([
+      env.PHOTOS_BUCKET.list({ prefix: `full/${id}.` }),
+      env.PHOTOS_BUCKET.list({ prefix: `thumb/${id}.` }),
+    ]);
+    const keys = [...fullListed.objects, ...thumbListed.objects].map(o => o.key);
+    await Promise.all(keys.map(k => env.PHOTOS_BUCKET.delete(k)));
+  }));
 
   return new Response(JSON.stringify({ ok: true, deleted: ids.length }), {
     headers: { 'content-type': 'application/json' },

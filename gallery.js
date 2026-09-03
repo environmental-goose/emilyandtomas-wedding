@@ -9,6 +9,7 @@ const sentinel = document.getElementById('sentinel');
 
 const viewer = document.getElementById('viewer');
 const viewerImg = document.getElementById('viewerImg');
+const viewerVideo = document.getElementById('viewerVideo');
 const viewerCaption = document.getElementById('viewerCaption');
 const viewerFigure = document.getElementById('viewerFigure');
 const viewerClose = document.getElementById('viewerClose');
@@ -81,17 +82,25 @@ function appendSlice(fromIndex, toIndex) {
   renderedIds = idsOf(allItems.slice(0, renderedCount));
 }
 
+const VIDEO_BADGE_SVG = '<svg viewBox="0 0 24 24" fill="white" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+
 function makeGridItem(item, index) {
   const btn = document.createElement('button');
   btn.className = 'grid-item';
   btn.type = 'button';
-  btn.setAttribute('aria-label', `Photo by ${item.guestName}`);
+  btn.setAttribute('aria-label', `${item.isVideo ? 'Video' : 'Photo'} by ${item.guestName}`);
   const img = document.createElement('img');
   img.src = item.thumbUrl;
   img.loading = 'lazy';
   img.decoding = 'async';
   img.alt = '';
   btn.appendChild(img);
+  if (item.isVideo) {
+    const badge = document.createElement('span');
+    badge.className = 'grid-item-video-badge';
+    badge.innerHTML = VIDEO_BADGE_SVG;
+    btn.appendChild(badge);
+  }
   btn.addEventListener('click', () => openViewer(index));
   return btn;
 }
@@ -118,16 +127,36 @@ function openViewer(index) {
   document.body.style.overflow = 'hidden';
 }
 
+function stopVideo() {
+  viewerVideo.pause();
+  viewerVideo.removeAttribute('src');
+  viewerVideo.load();
+}
+
 function closeViewer() {
   viewer.hidden = true;
   document.body.style.overflow = '';
+  stopVideo();
 }
 
 function updateViewer() {
   const item = allItems[currentViewerIndex];
   if (!item) return;
-  viewerImg.src = item.fullUrl;
-  viewerImg.alt = `Photo by ${item.guestName}`;
+
+  if (item.isVideo) {
+    viewerImg.hidden = true;
+    viewerVideo.hidden = false;
+    viewerVideo.poster = item.thumbUrl;
+    if (viewerVideo.src !== item.fullUrl) {
+      viewerVideo.src = item.fullUrl;
+    }
+  } else {
+    stopVideo();
+    viewerVideo.hidden = true;
+    viewerImg.hidden = false;
+    viewerImg.src = item.fullUrl;
+    viewerImg.alt = `Photo by ${item.guestName}`;
+  }
   viewerCaption.textContent = item.guestName ? `Shared by ${item.guestName}` : '';
 }
 

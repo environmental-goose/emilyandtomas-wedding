@@ -57,7 +57,8 @@
       cell.className = 'admin-cell';
       cell.innerHTML =
         '<label class="admin-check"><input type="checkbox"></label>' +
-        '<img src="' + item.thumbUrl + '" loading="lazy" decoding="async" alt="">';
+        '<img src="' + item.thumbUrl + '" loading="lazy" decoding="async" alt="">' +
+        (item.isVideo ? '<span class="grid-item-video-badge"><svg viewBox="0 0 24 24" fill="white" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span>' : '');
       const cb = cell.querySelector('input');
       cb.checked = selected.has(item.id);
       cb.addEventListener('change', () => {
@@ -102,23 +103,97 @@
     }
   });
 
+  const FETCH_CONCURRENCY = 4;
+
+  // Fetch one file's bytes, retrying once on any failure (network blip,
+  // a dropped connection on a big video, etc.) before giving up on it.
+  async function fetchBytesWithRetry(url, attempts) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return new Uint8Array(await res.arrayBuffer());
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr;
+  }
+
+  // Fetch every selected item's bytes with a small concurrency pool
+  // (instead of one-at-a-time) so a 20+ file batch doesn't take forever,
+  // and keep going past individual failures rather than aborting the
+  // whole batch on the first bad file.
+  async function fetchAllWithConcurrency(selItems, concurrency, onProgress) {
+    const results = new Array(selItems.length).fill(null);
+    const failed = [];
+    let nextIndex = 0;
+    let doneCount = 0;
+
+    async function worker() {
+      for (;;) {
+        const i = nextIndex++;
+        if (i >= selItems.length) return;
+        try {
+          results[i] = await fetchBytesWithRetry(selItems[i].fullUrl, 2);
+        } catch (e) {
+          failed.push(selItems[i]);
+        }
+        doneCount++;
+        onProgress(doneCount, selItems.length);
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(concurrency, selItems.length) }, worker);
+    await Promise.all(workers);
+    return { results, failed };
+  }
+
   downloadBtn.addEventListener('click', async () => {
     if (!selected.size) return;
     downloadBtn.disabled = true;
     const originalText = downloadBtn.textContent;
     try {
       const ids = Array.from(selected);
-      const files = {};
-      for (let i = 0; i < ids.length; i++) {
-        downloadBtn.textContent = 'Fetching ' + (i + 1) + '/' + ids.length + '…';
-        const item = items.find(it => it.id === ids[i]);
-        const res = await fetch(item.fullUrl);
-        const buf = new Uint8Array(await res.arrayBuffer());
-        const safeName = (item.guestName || 'photo').replace(/[^a-z0-9-_]+/gi, '_');
-        files[safeName + '_' + item.id.slice(0, 8) + '.jpg'] = buf;
+      const selItems = ids.map(id => items.find(it => it.id === id)).filter(Boolean);
+
+      const { results, failed } = await fetchAllWithConcurrency(selItems, FETCH_CONCURRENCY, (done, total) => {
+        downloadBtn.textContent = 'Fetching ' + done + '/' + total + '…';
+      });
+
+      if (failed.length) {
+        const okCount = selItems.length - failed.length;
+        const proceed = okCount > 0 && confirm(
+          failed.length + ' of ' + selItems.length + ' file(s) failed to download. ' +
+          'Continue and zip the ' + okCount + ' that succeeded?'
+        );
+        if (!proceed) {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = originalText;
+          return;
+        }
       }
+
+      const files = {};
+      selItems.forEach((item, i) => {
+        if (!results[i]) return;
+        const ext = (item.fullUrl.split('.').pop() || 'jpg').toLowerCase();
+        const safeName = (item.guestName || 'photo').replace(/[^a-z0-9-_]+/gi, '_');
+        files[safeName + '_' + item.id.slice(0, 8) + '.' + ext] = results[i];
+      });
+
       downloadBtn.textContent = 'Zipping…';
-      const zipped = fflate.zipSync(files, { level: 6 });
+      // Photos and videos are already-compressed formats — running them
+      // through DEFLATE (the old level:6) bought almost no size reduction
+      // while costing real time and blocking the tab. Store-only (level 0)
+      // via the async API is dramatically faster and doesn't freeze the UI.
+      const zipped = await new Promise((resolve, reject) => {
+        fflate.zip(files, { level: 0 }, (err, data) => {
+          if (err) reject(err); else resolve(data);
+        });
+      });
+
       const blob = new Blob([zipped], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -127,7 +202,7 @@
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     } catch (e) {
       alert('Download failed — try again, maybe with fewer photos selected.');
     } finally {
