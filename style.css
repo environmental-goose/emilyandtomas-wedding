@@ -183,7 +183,7 @@ body {
 .viewer-caption {
   position: absolute;
   left: max(14px, env(safe-area-inset-left));
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(98px + env(safe-area-inset-bottom));
   max-width: 65%;
   text-align: left; color: #fff;
   font-size: 0.78rem; margin: 0;
