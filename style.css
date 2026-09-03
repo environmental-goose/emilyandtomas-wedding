@@ -41,7 +41,7 @@ body {
 .landing-eyebrow {
   font-family: 'Cormorant Garamond', serif;
   font-style: italic; font-weight: 500;
-  font-size: 1.15rem; letter-spacing: 0.02em;
+  font-size: 1.35rem; letter-spacing: 0.02em;
   color: var(--text-muted); margin: 0 0 2px;
 }
 .couple-names {
@@ -50,18 +50,18 @@ body {
   font-size: clamp(2.4rem, 7vw, 3.8rem);
   margin: 0 0 8px;
   letter-spacing: 0.05em;
+  display: flex; justify-content: center; align-items: baseline; gap: 0.08em;
 }
 .couple-names .amp {
   font-family: 'Parisienne', cursive;
   font-weight: 400;
   font-size: 0.65em;
   color: var(--accent);
-  padding: 0 8px;
   vertical-align: -0.05em;
 }
 .tagline { color: var(--text-muted); font-size: 1.05rem; margin: 0 0 20px; }
 .landing .couple-names { margin-bottom: 14px; }
-.landing .tagline { margin-bottom: 32px; }
+.landing .tagline { margin-bottom: 48px; }
 .landing-actions { display: flex; flex-direction: column; gap: 12px; }
 .landing-btn {
   display: flex; align-items: center; justify-content: center; gap: 10px;
