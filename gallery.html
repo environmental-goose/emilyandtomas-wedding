@@ -27,14 +27,35 @@
     <button class="viewer-icon-btn" id="viewerClose" aria-label="Exit photo view">Exit</button>
   </div>
   <button class="viewer-nav prev" id="viewerPrev" aria-label="Previous">‹</button>
-  <figure class="viewer-figure" id="viewerFigure">
-    <img id="viewerImg" alt="">
-    <video id="viewerVideo" controls playsinline webkit-playsinline hidden></video>
-    <p class="viewer-caption" id="viewerCaption"></p>
-  </figure>
+
+  <div class="viewer-track" id="viewerTrack">
+    <figure class="viewer-slide" data-slot="prev">
+      <img class="slide-thumb" alt="">
+      <img class="slide-full" alt="" hidden>
+      <video class="slide-full-video" playsinline webkit-playsinline muted hidden></video>
+      <div class="slide-loading" hidden><span class="spinner" aria-hidden="true"></span><span>Loading…</span></div>
+    </figure>
+    <figure class="viewer-slide" data-slot="current">
+      <img class="slide-thumb" alt="">
+      <img class="slide-full" alt="" hidden>
+      <video class="slide-full-video" controls playsinline webkit-playsinline hidden></video>
+      <div class="slide-loading" hidden><span class="spinner" aria-hidden="true"></span><span>Loading…</span></div>
+    </figure>
+    <figure class="viewer-slide" data-slot="next">
+      <img class="slide-thumb" alt="">
+      <img class="slide-full" alt="" hidden>
+      <video class="slide-full-video" playsinline webkit-playsinline muted hidden></video>
+      <div class="slide-loading" hidden><span class="spinner" aria-hidden="true"></span><span>Loading…</span></div>
+    </figure>
+  </div>
+
+  <p class="viewer-caption" id="viewerCaption"></p>
+
   <button class="viewer-nav next" id="viewerNext" aria-label="Next">›</button>
   <div class="viewer-bottom">
+    <button type="button" class="viewer-arrow-btn" id="viewerPrevBtn" aria-label="Previous photo">‹</button>
     <button type="button" class="viewer-download-btn" id="viewerDownload">Download</button>
+    <button type="button" class="viewer-arrow-btn" id="viewerNextBtn" aria-label="Next photo">›</button>
   </div>
 </div>
 
