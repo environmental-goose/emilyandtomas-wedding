@@ -6,6 +6,17 @@
 // placeholder so an unloaded neighbor never gets mistaken for the current
 // photo failing to change.
 
+// iOS Safari fires its own non-standard gesture events for a two-finger
+// pinch (in addition to touch events) and will perform its native
+// page-zoom unless these are prevented — without this, pinch-to-zoom on
+// a photo fights the browser's own zoom instead of driving our custom
+// one. Locking the viewport (see gallery.html's <meta viewport>) handles
+// most of it; this covers WebKit's separate gesture-event path. It's a
+// no-op on browsers that don't fire these events.
+['gesturestart', 'gesturechange', 'gestureend'].forEach(type => {
+  document.addEventListener(type, e => e.preventDefault());
+});
+
 const grid = document.getElementById('grid');
 const emptyState = document.getElementById('emptyState');
 const sentinel = document.getElementById('sentinel');

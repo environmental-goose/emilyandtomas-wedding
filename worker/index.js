@@ -184,8 +184,9 @@ async function handlePhotosList(request, env) {
       takenAt: meta.takenAt || null,
       sortTime,
     };
-  // Oldest taken first, so the gallery reads chronologically top to bottom.
-  }).sort((a, b) => new Date(a.sortTime) - new Date(b.sortTime));
+  // Newest taken first, so the gallery reads newest-at-top regardless of
+  // upload order.
+  }).sort((a, b) => new Date(b.sortTime) - new Date(a.sortTime));
 
   return new Response(JSON.stringify({ items }), {
     headers: { 'content-type': 'application/json' },
@@ -194,19 +195,56 @@ async function handlePhotosList(request, env) {
 
 // GET /photos/<kind>/<id>.jpg — streams an object straight out of R2.
 // Add ?dl=1 to force a download instead of an inline view.
+//
+// Range requests are mandatory here, not an optimization: iOS Safari's
+// <video> element requires the server to honor `Range` (it probes with
+// one before it will play anything at all) and will otherwise get stuck
+// showing just the poster frame with no way to play it, even though the
+// exact same URL loads fine as a plain <img> or in desktop Chrome.
 async function handlePhotoServe(request, env, key) {
-  const obj = await env.PHOTOS_BUCKET.get(key);
+  const rangeHeader = request.headers.get('range');
+  let range;
+  if (rangeHeader) {
+    const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader.trim());
+    if (match) {
+      const start = parseInt(match[1], 10);
+      const end = match[2] ? parseInt(match[2], 10) : undefined;
+      range = end !== undefined ? { offset: start, length: end - start + 1 } : { offset: start };
+    }
+  }
+
+  let obj;
+  try {
+    obj = range
+      ? await env.PHOTOS_BUCKET.get(key, { range })
+      : await env.PHOTOS_BUCKET.get(key);
+  } catch (e) {
+    // An unsatisfiable/malformed range (or anything else that throws) —
+    // fall back to serving the whole object rather than erroring out.
+    obj = await env.PHOTOS_BUCKET.get(key);
+    range = undefined;
+  }
   if (!obj) return new Response('Not found', { status: 404 });
 
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
   headers.set('etag', obj.httpEtag);
   headers.set('cache-control', 'public, max-age=31536000, immutable');
+  headers.set('accept-ranges', 'bytes');
 
   const url = new URL(request.url);
   if (url.searchParams.get('dl')) {
     const filename = (obj.customMetadata && obj.customMetadata.originalName) || key.split('/').pop();
     headers.set('content-disposition', `attachment; filename="${filename.replace(/"/g, '')}"`);
+  }
+
+  if (range && obj.range) {
+    const total = obj.size;
+    const start = obj.range.offset ?? 0;
+    const length = obj.range.length ?? (total - start);
+    const end = Math.max(start, start + length - 1);
+    headers.set('content-range', `bytes ${start}-${end}/${total}`);
+    return new Response(obj.body, { status: 206, headers });
   }
 
   return new Response(obj.body, { headers });
