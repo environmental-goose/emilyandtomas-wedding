@@ -193,12 +193,22 @@ function loadSlide(slideEl, item, isCurrent) {
   fullVideo.style.transform = '';
 
   if (!item) {
-    slideEl.hidden = true;
+    // This slot has no photo (there's no prev before the first item, or
+    // no next after the last). We deliberately do NOT use the `hidden`
+    // attribute here: it forces display:none, which removes the slide
+    // from the flex layout entirely and shifts its siblings into its
+    // slot — since the track's resting transform assumes exactly three
+    // fixed 100%-wide slots, that shift silently put the *next* photo's
+    // slide where "current" is supposed to be, so opening the very first
+    // photo actually showed the second one. visibility:hidden keeps the
+    // slide's slot (and the 3-slot geometry) intact while making it
+    // invisible and untouchable.
+    slideEl.style.visibility = 'hidden';
     slideEl.dataset.itemId = '';
     return;
   }
 
-  slideEl.hidden = false;
+  slideEl.style.visibility = '';
   slideEl.dataset.itemId = item.id;
   thumbImg.src = item.thumbUrl;
   thumbImg.alt = '';

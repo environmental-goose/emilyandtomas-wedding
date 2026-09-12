@@ -65,6 +65,9 @@ export default {
     if (request.method === 'POST' && pathname === '/api/admin/delete') {
       return handleAdminDelete(request, env);
     }
+    if (request.method === 'POST' && pathname === '/api/admin/backfill-taken-at') {
+      return handleBackfillTakenAt(request, env);
+    }
 
     return env.ASSETS.fetch(request);
   },
@@ -283,4 +286,150 @@ async function handleAdminDelete(request, env) {
   return new Response(JSON.stringify({ ok: true, deleted: ids.length }), {
     headers: { 'content-type': 'application/json' },
   });
+}
+
+// POST /api/admin/backfill-taken-at — one-time (re-runnable, idempotent)
+// repair for photos uploaded before this app correctly extracted EXIF
+// capture time client-side. Those objects' full-res bytes are still
+// sitting in R2 exactly as uploaded, so we re-read each one here and
+// pull DateTimeOriginal straight out of its JPEG EXIF segment
+// server-side, then re-save the object with that filled in. Only
+// touches objects that don't already have a takenAt, so it's always
+// safe to re-run (e.g. after a fresh batch of guest uploads).
+async function handleBackfillTakenAt(request, env) {
+  if (!isAdmin(request)) return new Response('Unauthorized', { status: 401 });
+
+  const listed = await env.PHOTOS_BUCKET.list({
+    prefix: 'full/',
+    limit: 1000,
+    include: ['customMetadata', 'httpMetadata'],
+  });
+
+  const result = { scanned: 0, updated: 0, skipped: 0, failed: 0, updatedKeys: [] };
+
+  for (const obj of listed.objects) {
+    result.scanned++;
+    const meta = obj.customMetadata || {};
+    if (meta.takenAt) {
+      result.skipped++;
+      continue;
+    }
+    const contentType = meta.contentType || (obj.httpMetadata && obj.httpMetadata.contentType) || '';
+    const looksLikeJpeg = contentType.includes('jpeg') || /\.jpe?g$/i.test(obj.key);
+    if (!looksLikeJpeg) {
+      result.skipped++;
+      continue;
+    }
+
+    try {
+      const full = await env.PHOTOS_BUCKET.get(obj.key);
+      if (!full) { result.failed++; continue; }
+      const bytes = new Uint8Array(await full.arrayBuffer());
+      const takenAt = readExifTakenAt(bytes);
+      if (!takenAt) {
+        result.skipped++;
+        continue;
+      }
+      await env.PHOTOS_BUCKET.put(obj.key, bytes, {
+        httpMetadata: full.httpMetadata,
+        customMetadata: { ...meta, takenAt },
+      });
+      result.updated++;
+      result.updatedKeys.push({ key: obj.key, takenAt });
+    } catch (e) {
+      result.failed++;
+    }
+  }
+
+  return new Response(JSON.stringify(result), {
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+// ---- Minimal, dependency-free JPEG EXIF DateTimeOriginal reader ----
+//
+// This project has no bundler/npm build step (see wrangler.jsonc — it's
+// a single plain worker/index.js), so pulling in a full EXIF library
+// just for backfilling old uploads would mean introducing one. We only
+// need one field (plus its UTC offset when present), so a small manual
+// TIFF/EXIF walker is the lower-risk option. Verified against every
+// currently-stored photo before deploying this — see commit history.
+function readExifTakenAt(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length < 4 || view.getUint16(0) !== 0xFFD8) return null; // not a JPEG
+
+  let offset = 2;
+  while (offset + 4 <= bytes.length) {
+    const marker = view.getUint16(offset);
+    if (marker === 0xFFD9 || marker === 0xFFDA) break; // EOI / start of scan
+    const segLen = view.getUint16(offset + 2);
+    if (marker === 0xFFE1) { // APP1
+      const segStart = offset + 4;
+      if (
+        bytes[segStart] === 0x45 && bytes[segStart + 1] === 0x78 &&
+        bytes[segStart + 2] === 0x69 && bytes[segStart + 3] === 0x66
+      ) { // "Exif"
+        const result = parseTiffForDateTimeOriginal(view, segStart + 6, bytes);
+        if (result) return result;
+      }
+    }
+    offset += 2 + segLen;
+  }
+  return null;
+}
+
+function parseTiffForDateTimeOriginal(view, tiffStart, bytes) {
+  const byteOrderMark = view.getUint16(tiffStart);
+  const little = byteOrderMark === 0x4949; // 'II'
+  if (!little && byteOrderMark !== 0x4D4D) return null; // not 'MM' either
+  const getU16 = o => view.getUint16(o, little);
+  const getU32 = o => view.getUint32(o, little);
+
+  let dateTimeOriginal = null;
+  let offsetTimeOriginal = null;
+
+  function readAscii(start, count) {
+    let s = '';
+    for (let i = 0; i < count - 1; i++) { // count includes the trailing NUL
+      const c = bytes[start + i];
+      if (c === 0) break;
+      s += String.fromCharCode(c);
+    }
+    return s;
+  }
+
+  function readIfd(ifdOffset) {
+    const entryCount = getU16(ifdOffset);
+    for (let i = 0; i < entryCount; i++) {
+      const entryOffset = ifdOffset + 2 + i * 12;
+      const tag = getU16(entryOffset);
+      const type = getU16(entryOffset + 2);
+      const count = getU32(entryOffset + 4);
+      const valueOffset = entryOffset + 8;
+      // ASCII values <=4 bytes are stored inline; longer ones store an
+      // offset (relative to the TIFF header) to the actual bytes.
+      const dataStart = (type === 2 && count <= 4) ? valueOffset : tiffStart + getU32(valueOffset);
+      if (tag === 0x9003 && type === 2) { // DateTimeOriginal
+        dateTimeOriginal = readAscii(dataStart, count);
+      } else if (tag === 0x9011 && type === 2) { // OffsetTimeOriginal
+        offsetTimeOriginal = readAscii(dataStart, count);
+      } else if (tag === 0x8769 && type === 4) { // Exif IFD pointer — recurse
+        readIfd(tiffStart + getU32(valueOffset));
+      }
+    }
+  }
+
+  try {
+    readIfd(tiffStart + getU32(tiffStart + 4));
+  } catch (e) {
+    return null;
+  }
+
+  if (!dateTimeOriginal) return null;
+  const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(dateTimeOriginal);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}${offsetTimeOriginal || 'Z'}`;
+  const parsed = new Date(iso);
+  return isNaN(parsed) ? null : parsed.toISOString();
 }
