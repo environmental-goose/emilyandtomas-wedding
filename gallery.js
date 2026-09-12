@@ -150,6 +150,27 @@ function clamp(v, min, max) {
 // then swaps in the full-resolution media once it has actually finished
 // loading — this is what stops a swipe from ever leaving the *previous*
 // photo on screen while the caption has already moved on to the new one.
+// Grabs whatever frame the <video> element currently has decoded (called
+// on 'loadeddata', i.e. the frame at the video's starting position — its
+// first frame) and returns it as a data URL usable as a poster image.
+// Same-origin video, so this never hits a tainted-canvas security error;
+// any other failure just means we keep the existing (upload-time) poster.
+function captureVideoFrame(videoEl) {
+  try {
+    const w = videoEl.videoWidth, h = videoEl.videoHeight;
+    if (!w || !h) return null;
+    const MAX_DIM = 480;
+    const scale = Math.min(1, MAX_DIM / Math.max(w, h));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  } catch (e) {
+    return null;
+  }
+}
+
 function loadSlide(slideEl, item, isCurrent) {
   if (!slideEl) return;
   const thumbImg = slideEl.querySelector('.slide-thumb');
@@ -167,6 +188,7 @@ function loadSlide(slideEl, item, isCurrent) {
   fullImg.onerror = null;
   fullVideo.oncanplay = null;
   fullVideo.onerror = null;
+  fullVideo.onloadeddata = null;
   fullImg.style.transform = '';
   fullVideo.style.transform = '';
 
@@ -192,11 +214,20 @@ function loadSlide(slideEl, item, isCurrent) {
   };
 
   if (item.isVideo) {
+    // item.thumbUrl is the upload-time-generated thumbnail — used as an
+    // immediate fallback poster — but as soon as the video's own first
+    // frame actually decodes we swap the poster to that real frame so
+    // the pre-play thumbnail always reflects the video itself.
     fullVideo.poster = item.thumbUrl;
     fullVideo.hidden = false;
     if (isCurrent) {
       // Only actually fetch video bytes for the slide the user is looking
       // at — neighbors just show their poster frame until swiped to.
+      fullVideo.onloadeddata = () => {
+        if (slideEl.dataset.itemId !== item.id) return; // stale guard
+        const frame = captureVideoFrame(fullVideo);
+        if (frame) fullVideo.poster = frame;
+      };
       fullVideo.oncanplay = markLoaded;
       fullVideo.onerror = markLoaded;
       fullVideo.src = item.fullUrl;
@@ -379,7 +410,13 @@ let panStartX = 0, panStartY = 0;
 let panOriginX = 0, panOriginY = 0;
 let dragStartX = 0, dragStartY = 0;
 let dragDX = 0;
+let dragDY = 0;
 let dragAborted = false;
+let swipeAxis = null; // null (undecided) | 'x' (nav) | 'y-dismiss' | 'y-ignore'
+
+const SWIPE_AXIS_DEADZONE = 8; // px of movement before we commit to an axis
+const DISMISS_THRESHOLD = 120; // px of downward drag that commits to closing
+const DISMISS_FADE_DISTANCE = 320; // px of drag over which the backdrop fully fades
 
 function resetZoomState() {
   zoom = 1;
@@ -484,31 +521,64 @@ function beginSwipe(t) {
   dragStartX = t.clientX;
   dragStartY = t.clientY;
   dragDX = 0;
+  dragDY = 0;
   dragAborted = false;
+  swipeAxis = null;
   viewerTrack.style.transition = '';
+  viewer.style.transition = '';
 }
 
+// One finger, not zoomed in: could turn into a horizontal swipe (change
+// photo) or a vertical swipe-down (dismiss the viewer). We don't decide
+// which until the drag clears a small deadzone, then lock to that axis
+// for the rest of the gesture — this is what keeps a diagonal swipe from
+// half-triggering both, and keeps a sideways photo-change swipe from ever
+// being misread as a dismiss (or vice versa).
 function updateSwipe(t) {
   const dx = t.clientX - dragStartX;
   const dy = t.clientY - dragStartY;
-  if (!dragAborted && Math.abs(dy) > 30 && Math.abs(dy) > Math.abs(dx) * 1.5) {
-    // Mostly-vertical gesture — abandon the swipe rather than fight it.
-    dragAborted = true;
+
+  if (swipeAxis === null) {
+    if (Math.hypot(dx, dy) < SWIPE_AXIS_DEADZONE) return;
+    if (Math.abs(dy) > Math.abs(dx) * 1.3) {
+      swipeAxis = dy > 0 ? 'y-dismiss' : 'y-ignore';
+    } else {
+      swipeAxis = 'x';
+    }
   }
-  if (dragAborted) return;
-  dragDX = dx;
-  let visualDX = dx;
-  // Rubber-band at the ends of the list.
-  if ((currentViewerIndex <= 0 && dx > 0) || (currentViewerIndex >= allItems.length - 1 && dx < 0)) {
-    visualDX = dx * 0.35;
+
+  if (swipeAxis === 'x') {
+    dragDX = dx;
+    let visualDX = dx;
+    // Rubber-band at the ends of the list.
+    if ((currentViewerIndex <= 0 && dx > 0) || (currentViewerIndex >= allItems.length - 1 && dx < 0)) {
+      visualDX = dx * 0.35;
+    }
+    viewerTrack.style.transform = `translateX(calc(-100% + ${visualDX}px))`;
+  } else if (swipeAxis === 'y-dismiss') {
+    dragDY = Math.max(0, dy); // only the downward component counts
+    const progress = clamp(dragDY / DISMISS_FADE_DISTANCE, 0, 1);
+    viewer.style.transform = `translateY(${dragDY}px)`;
+    viewer.style.opacity = String(1 - progress * 0.55);
   }
-  viewerTrack.style.transform = `translateX(calc(-100% + ${visualDX}px))`;
+  // 'y-ignore' (swiping up): not a gesture we handle — do nothing and let
+  // touchend snap back to rest.
 }
 
 function endSwipe() {
   touchMode = null;
-  if (dragAborted) {
+  if (swipeAxis === 'y-dismiss') {
+    if (dragDY >= DISMISS_THRESHOLD) {
+      dismissViewerBySwipe();
+    } else {
+      snapBackVertical();
+    }
+    swipeAxis = null;
+    return;
+  }
+  if (swipeAxis !== 'x' || dragAborted) {
     snapBack();
+    swipeAxis = null;
     return;
   }
   const width = viewerTrack.clientWidth || 1;
@@ -520,6 +590,26 @@ function endSwipe() {
   } else {
     snapBack();
   }
+  swipeAxis = null;
+}
+
+function snapBackVertical() {
+  viewer.style.transition = 'transform 220ms ease, opacity 220ms ease';
+  viewer.style.transform = '';
+  viewer.style.opacity = '';
+  setTimeout(() => { viewer.style.transition = ''; }, 240);
+}
+
+function dismissViewerBySwipe() {
+  viewer.style.transition = 'transform 200ms ease-in, opacity 200ms ease-in';
+  viewer.style.transform = 'translateY(100%)';
+  viewer.style.opacity = '0';
+  setTimeout(() => {
+    viewer.style.transition = '';
+    viewer.style.transform = '';
+    viewer.style.opacity = '';
+    closeViewer();
+  }, 200);
 }
 
 function activeTouches(e) {
@@ -568,9 +658,14 @@ viewerTrack.addEventListener('touchend', e => {
 }, { passive: true });
 
 viewerTrack.addEventListener('touchcancel', () => {
-  if (touchMode === 'swipe') snapBack();
-  else if (touchMode === 'pinch') endPinch();
-  else touchMode = null;
+  if (touchMode === 'swipe') {
+    if (swipeAxis === 'y-dismiss') snapBackVertical();
+    else snapBack();
+    swipeAxis = null;
+  } else if (touchMode === 'pinch') {
+    endPinch();
+  }
+  touchMode = null;
 }, { passive: true });
 
 // ---- visibility-aware polling ----

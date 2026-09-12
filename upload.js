@@ -141,7 +141,14 @@ function fileLastModifiedIso(file) {
 
 async function uploadOnce(task, guestName) {
   const video = isVideoFile(task.file);
-  const takenAt = video ? fileLastModifiedIso(task.file) : await readTakenAt(task.file);
+  // EXIF is the authoritative source for photos (it's the actual moment
+  // the shutter opened, independent of any later file copy/export), but
+  // fall back to the file's own last-modified time when EXIF is missing
+  // (non-EXIF formats, screenshots, etc.) rather than leaving takenAt
+  // blank and letting the photo sort by upload time instead.
+  const takenAt = video
+    ? fileLastModifiedIso(task.file)
+    : (await readTakenAt(task.file)) || fileLastModifiedIso(task.file);
 
   let thumbBlob;
   if (video) {
