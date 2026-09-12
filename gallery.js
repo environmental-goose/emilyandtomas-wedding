@@ -254,20 +254,33 @@ viewerClose.addEventListener('click', closeViewer);
 
 let isAnimatingTrack = false;
 
+const TRACK_TRANSITION_MS = 280;
+
 function animateTrackTo(mult, onDone) {
   isAnimatingTrack = true;
-  viewerTrack.style.transition = 'transform 280ms cubic-bezier(.22,.61,.36,1)';
+  viewerTrack.style.transition = `transform ${TRACK_TRANSITION_MS}ms cubic-bezier(.22,.61,.36,1)`;
   // eslint-disable-next-line no-unused-expressions
   viewerTrack.offsetHeight; // force reflow so the transition applies
   viewerTrack.style.transform = `translateX(${mult * 100}%)`;
-  const onEnd = (e) => {
-    if (e && e.target !== viewerTrack) return;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
     viewerTrack.removeEventListener('transitionend', onEnd);
+    clearTimeout(fallbackTimer);
     viewerTrack.style.transition = '';
     isAnimatingTrack = false;
     onDone();
   };
+  const onEnd = (e) => {
+    if (e && e.target !== viewerTrack) return;
+    finish();
+  };
   viewerTrack.addEventListener('transitionend', onEnd);
+  // Safety net: a backgrounded tab, a dropped frame, or any other reason
+  // transitionend fails to fire would otherwise leave the viewer stuck
+  // mid-slide forever (wrong photo shown, nav no longer advancing).
+  const fallbackTimer = setTimeout(finish, TRACK_TRANSITION_MS + 200);
 }
 
 function finalizeNav(delta) {
