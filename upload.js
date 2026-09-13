@@ -216,16 +216,15 @@ function makeThumbnail(file) {
   });
 }
 
-// Video thumbnail: decode the video's first frame via a hidden <video>
-// element and draw it to canvas, exactly matching the technique the
-// slideshow viewer uses for its own pre-play poster frame (capture on
-// 'loadeddata', no explicit seek) — seeking to a later timestamp used to
-// be tried here instead, but the 'seeked' event it depends on doesn't
-// reliably fire for every codec/container, which silently left some
-// videos stuck on the generic fallback thumbnail forever. Bounded by a
-// timeout since decode timing still varies across browsers — on any
-// failure the caller falls back to makeVideoFallbackThumbnail so the
-// gallery always has something to show.
+// Video thumbnail: decode a frame shortly into the clip via a hidden
+// <video> element, then draw it to canvas. Frame 0 is often solid
+// black/undecoded, so we nudge forward a little first — but a stalled
+// 'seeked' event (it doesn't reliably fire for every codec/container)
+// no longer means giving up on a real frame entirely: if it hasn't
+// fired within seekTimeoutMs we just capture whatever's already on
+// screen instead, which is still far better than the generic fallback
+// tile. Only a genuine load failure (or nothing decodable within the
+// overall timeout) falls all the way back to makeVideoFallbackThumbnail.
 function makeVideoThumbnail(file) {
   return new Promise((resolve, reject) => {
     const videoEl = document.createElement('video');
@@ -238,15 +237,14 @@ function makeVideoThumbnail(file) {
     const finish = (err, blob) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(overallTimer);
+      clearTimeout(seekTimer);
       URL.revokeObjectURL(objectUrl);
       videoEl.remove();
       if (err) reject(err); else resolve(blob);
     };
 
-    const timer = setTimeout(() => finish(new Error('video thumbnail timed out')), 8000);
-
-    videoEl.addEventListener('loadeddata', () => {
+    const captureNow = () => {
       try {
         const w = videoEl.videoWidth || THUMB_MAX_DIM;
         const h = videoEl.videoHeight || THUMB_MAX_DIM;
@@ -263,6 +261,23 @@ function makeVideoThumbnail(file) {
       } catch (e) {
         finish(e);
       }
+    };
+
+    const overallTimer = setTimeout(() => finish(new Error('video thumbnail timed out')), 8000);
+    let seekTimer;
+
+    videoEl.addEventListener('loadeddata', () => {
+      try {
+        videoEl.currentTime = Math.min(0.2, (videoEl.duration || 1) / 2);
+      } catch (e) {
+        captureNow();
+        return;
+      }
+      seekTimer = setTimeout(captureNow, 1500);
+      videoEl.addEventListener('seeked', () => {
+        clearTimeout(seekTimer);
+        captureNow();
+      }, { once: true });
     });
     videoEl.addEventListener('error', () => finish(new Error('video load error')));
 
