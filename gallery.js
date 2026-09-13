@@ -133,9 +133,30 @@ function loadMore() {
   appendSlice(from, to);
 }
 
+const LOAD_MORE_ROOT_MARGIN = 600; // px — keep in sync with the observer's rootMargin below
+
+// IntersectionObserver only fires when the sentinel's intersecting state
+// actually *changes* (crosses the 0 threshold), not continuously while it
+// stays intersecting. A batch of photos is often shorter than the 600px
+// root margin, so after loading one batch the sentinel can still be
+// sitting inside the trigger zone — no further transition ever happens,
+// so the observer never fires again and the gallery silently stops after
+// the very first page. Loop here instead of relying on a single fire:
+// keep loading batches for as long as the sentinel remains inside the
+// trigger zone (or until everything is loaded), so any batch size /
+// screen size / column-count combination still reaches the end.
+function loadMoreWhileNeeded() {
+  loadMore();
+  if (renderedCount >= allItems.length) return;
+  const rect = sentinel.getBoundingClientRect();
+  if (rect.top < window.innerHeight + LOAD_MORE_ROOT_MARGIN) {
+    loadMoreWhileNeeded();
+  }
+}
+
 const observer = new IntersectionObserver(entries => {
-  if (entries.some(e => e.isIntersecting)) loadMore();
-}, { rootMargin: '600px' });
+  if (entries.some(e => e.isIntersecting)) loadMoreWhileNeeded();
+}, { rootMargin: `${LOAD_MORE_ROOT_MARGIN}px` });
 observer.observe(sentinel);
 
 // ---- full-screen viewer: 3-pane sliding track ----
