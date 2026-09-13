@@ -36,7 +36,7 @@ const ADMIN_PASSWORD = 'natrocks';
 
 // Bump this whenever thumbnails are regenerated in bulk (see thumbUrl
 // below) so stale, long-cached copies get evicted from browsers/CDN.
-const THUMB_CACHE_VERSION = 2;
+const THUMB_CACHE_VERSION = 3;
 
 const PAGE_ROUTES = {
   '/': '/index.html',
