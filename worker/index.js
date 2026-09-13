@@ -34,6 +34,10 @@ function extForMime(mime) {
 // admin API call, so changing it takes effect on the next deploy.
 const ADMIN_PASSWORD = 'natrocks';
 
+// Bump this whenever thumbnails are regenerated in bulk (see thumbUrl
+// below) so stale, long-cached copies get evicted from browsers/CDN.
+const THUMB_CACHE_VERSION = 2;
+
 const PAGE_ROUTES = {
   '/': '/index.html',
   '/upload': '/upload.html',
@@ -203,7 +207,11 @@ async function handlePhotosList(request, env) {
     const sortTime = meta.takenAt || uploadedAt;
     return {
       id,
-      thumbUrl: `/photos/thumb/${id}.jpg`,
+      // ?v= busts the long immutable browser/CDN cache on thumb/*.jpg
+      // whenever a thumbnail's actual bytes are replaced in place (e.g.
+      // the one-time video-thumbnail backfill) — bump THUMB_CACHE_VERSION
+      // if thumbnails are ever bulk-regenerated again.
+      thumbUrl: `/photos/thumb/${id}.jpg?v=${THUMB_CACHE_VERSION}`,
       // Use the real stored key so the extension always matches what's
       // actually in the bucket (thumb is always .jpg; full varies).
       fullUrl: `/photos/${obj.key}`,

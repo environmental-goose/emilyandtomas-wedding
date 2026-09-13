@@ -216,10 +216,14 @@ function makeThumbnail(file) {
   });
 }
 
-// Video thumbnail: decode a frame a moment into the clip (frame 0 is
-// sometimes black/undecoded) via a hidden <video> element, then draw it
-// to canvas exactly like the photo thumbnail path. Bounded by a timeout
-// since seek/decode timing is inconsistent across browsers — on any
+// Video thumbnail: decode the video's first frame via a hidden <video>
+// element and draw it to canvas, exactly matching the technique the
+// slideshow viewer uses for its own pre-play poster frame (capture on
+// 'loadeddata', no explicit seek) — seeking to a later timestamp used to
+// be tried here instead, but the 'seeked' event it depends on doesn't
+// reliably fire for every codec/container, which silently left some
+// videos stuck on the generic fallback thumbnail forever. Bounded by a
+// timeout since decode timing still varies across browsers — on any
 // failure the caller falls back to makeVideoFallbackThumbnail so the
 // gallery always has something to show.
 function makeVideoThumbnail(file) {
@@ -227,7 +231,7 @@ function makeVideoThumbnail(file) {
     const videoEl = document.createElement('video');
     videoEl.muted = true;
     videoEl.playsInline = true;
-    videoEl.preload = 'metadata';
+    videoEl.preload = 'auto';
     const objectUrl = URL.createObjectURL(file);
     let settled = false;
 
@@ -243,13 +247,6 @@ function makeVideoThumbnail(file) {
     const timer = setTimeout(() => finish(new Error('video thumbnail timed out')), 8000);
 
     videoEl.addEventListener('loadeddata', () => {
-      try {
-        videoEl.currentTime = Math.min(0.2, (videoEl.duration || 1) / 2);
-      } catch (e) {
-        finish(e);
-      }
-    });
-    videoEl.addEventListener('seeked', () => {
       try {
         const w = videoEl.videoWidth || THUMB_MAX_DIM;
         const h = videoEl.videoHeight || THUMB_MAX_DIM;
@@ -273,9 +270,13 @@ function makeVideoThumbnail(file) {
   });
 }
 
-// Generic placeholder (dark tile + play glyph) used when a real video
-// frame can't be captured — keeps the gallery grid consistent instead of
-// leaving a broken thumbnail.
+// Generic placeholder (plain dark tile) used when a real video frame
+// can't be captured — keeps the gallery grid consistent instead of
+// leaving a broken thumbnail. Deliberately has no play glyph baked into
+// the pixels: the gallery/admin grids already overlay their own video
+// badge on top of every video thumbnail, so drawing one here as well
+// used to produce two overlapping video symbols whenever this fallback
+// was the one that got used.
 function makeVideoFallbackThumbnail() {
   return new Promise(resolve => {
     const canvas = document.createElement('canvas');
@@ -284,19 +285,6 @@ function makeVideoFallbackThumbnail() {
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#2E241C';
     ctx.fillRect(0, 0, 320, 320);
-    ctx.fillStyle = '#ffffff';
-    ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    ctx.arc(160, 160, 46, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#2E241C';
-    ctx.beginPath();
-    ctx.moveTo(146, 138);
-    ctx.lineTo(146, 182);
-    ctx.lineTo(186, 160);
-    ctx.closePath();
-    ctx.fill();
     canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.8);
   });
 }
