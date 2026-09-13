@@ -82,6 +82,12 @@ async function refresh() {
     renderedIds = newIds;
     renderSlice();
   }
+  // The initial batch (or a batch refreshed in place) might not be tall
+  // enough to fill the screen and push the sentinel out of view — in
+  // that case there'd be nothing left to trigger further loading at all,
+  // so proactively top up right after rendering rather than only ever
+  // reacting to a later intersection change.
+  fillViewportIfNeeded();
 }
 
 function renderSlice() {
@@ -140,22 +146,26 @@ const LOAD_MORE_ROOT_MARGIN = 600; // px — keep in sync with the observer's ro
 // stays intersecting. A batch of photos is often shorter than the 600px
 // root margin, so after loading one batch the sentinel can still be
 // sitting inside the trigger zone — no further transition ever happens,
-// so the observer never fires again and the gallery silently stops after
-// the very first page. Loop here instead of relying on a single fire:
-// keep loading batches for as long as the sentinel remains inside the
-// trigger zone (or until everything is loaded), so any batch size /
-// screen size / column-count combination still reaches the end.
-function loadMoreWhileNeeded() {
-  loadMore();
+// so the observer never fires again and the gallery silently stalls after
+// just one page. It also never fires *usefully* the very first time,
+// since observe() queues its initial callback before the first /api/photos
+// response has even come back, when allItems is still empty. So instead
+// of trusting a single observer event to mean "load one batch", this
+// checks-and-loops on demand: keep loading batches for as long as the
+// sentinel remains inside the trigger zone (or until everything is
+// loaded), and it's called both from the observer and directly after any
+// render, so it doesn't depend on a state transition actually occurring.
+function fillViewportIfNeeded() {
   if (renderedCount >= allItems.length) return;
   const rect = sentinel.getBoundingClientRect();
   if (rect.top < window.innerHeight + LOAD_MORE_ROOT_MARGIN) {
-    loadMoreWhileNeeded();
+    loadMore();
+    fillViewportIfNeeded();
   }
 }
 
 const observer = new IntersectionObserver(entries => {
-  if (entries.some(e => e.isIntersecting)) loadMoreWhileNeeded();
+  if (entries.some(e => e.isIntersecting)) fillViewportIfNeeded();
 }, { rootMargin: `${LOAD_MORE_ROOT_MARGIN}px` });
 observer.observe(sentinel);
 
