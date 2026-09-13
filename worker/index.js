@@ -68,6 +68,9 @@ export default {
     if (request.method === 'POST' && pathname === '/api/admin/backfill-taken-at') {
       return handleBackfillTakenAt(request, env);
     }
+    if (request.method === 'GET' && pathname === '/api/admin/storage-usage') {
+      return handleStorageUsage(request, env);
+    }
 
     return env.ASSETS.fetch(request);
   },
@@ -81,6 +84,30 @@ function serveAsset(env, request, path) {
 
 function isAdmin(request) {
   return request.headers.get('X-Admin-Password') === ADMIN_PASSWORD;
+}
+
+// GET /api/admin/storage-usage — total bytes + object count across the
+// entire bucket (thumbs + full-res + anything else stored). Paginates
+// through R2's list() with its cursor since a single call caps out at
+// 1000 objects, which the bucket will eventually exceed.
+async function handleStorageUsage(request, env) {
+  if (!isAdmin(request)) return new Response('Unauthorized', { status: 401 });
+
+  let totalBytes = 0;
+  let objectCount = 0;
+  let cursor;
+  do {
+    const listed = await env.PHOTOS_BUCKET.list({ limit: 1000, cursor });
+    for (const obj of listed.objects) {
+      totalBytes += obj.size;
+      objectCount++;
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+
+  return new Response(JSON.stringify({ totalBytes, objectCount }), {
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 // POST /api/upload — streams one file (thumb or full) straight into R2.

@@ -268,6 +268,9 @@ body {
 .secondary-btn { background: var(--bg); border: 1px solid var(--border); color: var(--text); }
 .danger-btn { background: #B23A2E; color: #fff; }
 .secondary-btn:disabled, .danger-btn:disabled, .primary-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.storage-usage {
+  color: var(--text-muted); font-size: 0.8rem; margin: 0 0 10px; text-align: right;
+}
 .admin-toolbar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 16px;
   padding: 14px 18px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md);

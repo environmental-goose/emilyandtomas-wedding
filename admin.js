@@ -6,6 +6,7 @@
   const unlockBtn = document.getElementById('unlockBtn');
   const gateError = document.getElementById('gateError');
   const grid = document.getElementById('adminGrid');
+  const storageUsageEl = document.getElementById('storageUsage');
   const emptyState = document.getElementById('adminEmpty');
   const selectAllCb = document.getElementById('selectAll');
   const selectionCount = document.getElementById('selectionCount');
@@ -31,6 +32,7 @@
       gate.hidden = true;
       panel.hidden = false;
       loadPhotos();
+      loadStorageUsage();
     } else {
       gateError.hidden = false;
     }
@@ -47,6 +49,25 @@
     items = data.items || [];
     selected.clear();
     render();
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / Math.pow(1024, i);
+    return (i === 0 ? value : value.toFixed(value < 10 ? 2 : 1)) + ' ' + units[i];
+  }
+
+  async function loadStorageUsage() {
+    try {
+      const res = await fetch('/api/admin/storage-usage', { headers: { 'X-Admin-Password': password } });
+      if (!res.ok) throw new Error('storage-usage failed');
+      const data = await res.json();
+      storageUsageEl.textContent = formatBytes(data.totalBytes) + ' used across ' + data.objectCount + ' files';
+    } catch (e) {
+      storageUsageEl.textContent = '';
+    }
   }
 
   function render() {
@@ -100,6 +121,7 @@
       alert('Delete failed — try again.');
     } finally {
       deleteBtn.textContent = 'Delete';
+      loadStorageUsage();
     }
   });
 
