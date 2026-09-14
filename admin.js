@@ -311,106 +311,34 @@
     }
   });
 
-  const FETCH_CONCURRENCY = 4;
-
-  // Fetch one file's bytes, retrying once on any failure (network blip,
-  // a dropped connection on a big video, etc.) before giving up on it.
-  async function fetchBytesWithRetry(url, attempts) {
-    let lastErr;
-    for (let i = 0; i < attempts; i++) {
-      try {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return new Uint8Array(await res.arrayBuffer());
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-    throw lastErr;
-  }
-
-  // Fetch every selected item's bytes with a small concurrency pool
-  // (instead of one-at-a-time) so a 20+ file batch doesn't take forever,
-  // and keep going past individual failures rather than aborting the
-  // whole batch on the first bad file.
-  async function fetchAllWithConcurrency(selItems, concurrency, onProgress) {
-    const results = new Array(selItems.length).fill(null);
-    const failed = [];
-    let nextIndex = 0;
-    let doneCount = 0;
-
-    async function worker() {
-      for (;;) {
-        const i = nextIndex++;
-        if (i >= selItems.length) return;
-        try {
-          results[i] = await fetchBytesWithRetry(selItems[i].fullUrl, 2);
-        } catch (e) {
-          failed.push(selItems[i]);
-        }
-        doneCount++;
-        onProgress(doneCount, selItems.length);
-      }
-    }
-
-    const workers = Array.from({ length: Math.min(concurrency, selItems.length) }, worker);
-    await Promise.all(workers);
-    return { results, failed };
-  }
-
+  // The ZIP itself is now assembled server-side (see worker/index.js) —
+  // the Worker streams it straight out of R2 as it reads, instead of
+  // this page fetching every full-res file into memory and re-encoding
+  // them into one big Blob before anything could be saved. This just
+  // hands the Worker the selected ids and lets the browser's native
+  // download handling take it from there, which is also what gives the
+  // user a real OS/browser download-progress indicator instead of a
+  // frozen tab.
   downloadBtn.addEventListener('click', async () => {
     if (!selected.size) return;
     downloadBtn.disabled = true;
     const originalText = downloadBtn.textContent;
     try {
       const ids = Array.from(selected);
-      const selItems = ids.map(id => items.find(it => it.id === id)).filter(Boolean);
-
-      const { results, failed } = await fetchAllWithConcurrency(selItems, FETCH_CONCURRENCY, (done, total) => {
-        downloadBtn.textContent = 'Fetching ' + done + '/' + total + '…';
+      downloadBtn.textContent = 'Preparing…';
+      const res = await fetch('/api/admin/prepare-zip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+        body: JSON.stringify({ ids }),
       });
-
-      if (failed.length) {
-        const okCount = selItems.length - failed.length;
-        const proceed = okCount > 0 && confirm(
-          failed.length + ' of ' + selItems.length + ' file(s) failed to download. ' +
-          'Continue and zip the ' + okCount + ' that succeeded?'
-        );
-        if (!proceed) {
-          downloadBtn.disabled = false;
-          downloadBtn.textContent = originalText;
-          return;
-        }
-      }
-
-      const files = {};
-      selItems.forEach((item, i) => {
-        if (!results[i]) return;
-        const ext = (item.fullUrl.split('.').pop() || 'jpg').toLowerCase();
-        const safeName = (item.guestName || 'photo').replace(/[^a-z0-9-_]+/gi, '_');
-        files[safeName + '_' + item.id.slice(0, 8) + '.' + ext] = results[i];
-      });
-
-      downloadBtn.textContent = 'Zipping…';
-      // Photos and videos are already-compressed formats — running them
-      // through DEFLATE (the old level:6) bought almost no size reduction
-      // while costing real time and blocking the tab. Store-only (level 0)
-      // via the async API is dramatically faster and doesn't freeze the UI.
-      const zipped = await new Promise((resolve, reject) => {
-        fflate.zip(files, { level: 0 }, (err, data) => {
-          if (err) reject(err); else resolve(data);
-        });
-      });
-
-      const blob = new Blob([zipped], { type: 'application/zip' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'wedding-photos.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      if (!res.ok) throw new Error('prepare failed: ' + res.status);
+      const { token } = await res.json();
+      // A plain navigation (not fetch) so the browser treats the
+      // Content-Disposition: attachment response as a real download —
+      // handled by its own download manager — rather than something
+      // this page has to buffer and save itself. The response headers
+      // mean the current page is never actually left.
+      window.location.href = '/api/admin/download-zip?token=' + encodeURIComponent(token);
     } catch (e) {
       alert('Download failed — try again, maybe with fewer photos selected.');
     } finally {
