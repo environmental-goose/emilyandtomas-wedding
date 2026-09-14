@@ -503,11 +503,26 @@
       }
 
       const files = {};
+      // Ids commonly share their first 8 characters (a batch upload's
+      // timestamp prefix), so two photos from the same guest uploaded
+      // together can generate the exact same "name_idprefix.ext" key —
+      // without de-duping, the second one silently overwrites the first
+      // in this plain object and just vanishes from the zip with no
+      // error at all. Append a counter on any collision instead.
+      const usedNames = new Set();
       selItems.forEach((item, i) => {
         if (!results[i]) return;
         const ext = (item.fullUrl.split('.').pop() || 'jpg').toLowerCase();
         const safeName = (item.guestName || 'photo').replace(/[^a-z0-9-_]+/gi, '_');
-        files[safeName + '_' + item.id.slice(0, 8) + '.' + ext] = results[i];
+        let name = safeName + '_' + item.id.slice(0, 8) + '.' + ext;
+        if (usedNames.has(name)) {
+          const base = safeName + '_' + item.id.slice(0, 8);
+          let n = 2;
+          while (usedNames.has(base + '-' + n + '.' + ext)) n++;
+          name = base + '-' + n + '.' + ext;
+        }
+        usedNames.add(name);
+        files[name] = results[i];
       });
 
       downloadBtn.textContent = 'Zipping…';
