@@ -311,6 +311,125 @@
     }
   });
 
+  // ---- Minimal in-house ZIP writer (store/uncompressed only) ----
+  //
+  // This used to be a third-party library (fflate, loaded from cdnjs) —
+  // cdnjs has since dropped the package entirely (the script tag 404s),
+  // which silently broke every download. Photos/videos are already-
+  // compressed formats, so all this ever needed was ZIP's plain "stored"
+  // method: a per-file header with the real CRC-32/size (known upfront
+  // since every file is already fully in memory by the time this runs),
+  // the raw bytes, then a central directory + EOCD record at the end.
+  // No compression, no external dependency.
+  const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(bytes) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) {
+      crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function dosDateTime(d) {
+    const year = Math.max(1980, d.getFullYear());
+    const date = ((year - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    return { time: time & 0xFFFF, date: date & 0xFFFF };
+  }
+
+  // files: { "name.jpg": Uint8Array, ... } -> a complete ZIP as Uint8Array
+  function buildZipStore(files) {
+    const enc = new TextEncoder();
+    const { time, date } = dosDateTime(new Date());
+    const parts = [];
+    const central = [];
+    let offset = 0;
+
+    for (const name of Object.keys(files)) {
+      const bytes = files[name];
+      const nameBytes = enc.encode(name);
+      const crc = crc32(bytes);
+
+      const header = new Uint8Array(30 + nameBytes.length);
+      const hv = new DataView(header.buffer);
+      hv.setUint32(0, 0x04034b50, true);  // local file header signature
+      hv.setUint16(4, 20, true);          // version needed to extract
+      hv.setUint16(6, 0, true);           // flags
+      hv.setUint16(8, 0, true);           // compression method: stored
+      hv.setUint16(10, time, true);
+      hv.setUint16(12, date, true);
+      hv.setUint32(14, crc, true);
+      hv.setUint32(18, bytes.length, true);
+      hv.setUint32(22, bytes.length, true);
+      hv.setUint16(26, nameBytes.length, true);
+      hv.setUint16(28, 0, true);          // extra field length
+      header.set(nameBytes, 30);
+
+      central.push({ nameBytes, crc, size: bytes.length, localHeaderOffset: offset });
+
+      parts.push(header);
+      offset += header.length;
+      parts.push(bytes);
+      offset += bytes.length;
+    }
+
+    const centralStart = offset;
+    for (const entry of central) {
+      const header = new Uint8Array(46 + entry.nameBytes.length);
+      const hv = new DataView(header.buffer);
+      hv.setUint32(0, 0x02014b50, true);  // central directory file header signature
+      hv.setUint16(4, 20, true);          // version made by
+      hv.setUint16(6, 20, true);          // version needed to extract
+      hv.setUint16(8, 0, true);           // flags
+      hv.setUint16(10, 0, true);          // compression method: stored
+      hv.setUint16(12, time, true);
+      hv.setUint16(14, date, true);
+      hv.setUint32(16, entry.crc, true);
+      hv.setUint32(20, entry.size, true);
+      hv.setUint32(24, entry.size, true);
+      hv.setUint16(28, entry.nameBytes.length, true);
+      hv.setUint16(30, 0, true);          // extra field length
+      hv.setUint16(32, 0, true);          // file comment length
+      hv.setUint16(34, 0, true);          // disk number start
+      hv.setUint16(36, 0, true);          // internal file attributes
+      hv.setUint32(38, 0x81a40000, true); // external file attributes: unix -rw-r--r--
+      hv.setUint32(42, entry.localHeaderOffset, true);
+      header.set(entry.nameBytes, 46);
+      parts.push(header);
+      offset += header.length;
+    }
+    const centralSize = offset - centralStart;
+
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);   // end of central directory signature
+    ev.setUint16(4, 0, true);            // disk number
+    ev.setUint16(6, 0, true);            // disk where central directory starts
+    ev.setUint16(8, central.length, true);
+    ev.setUint16(10, central.length, true);
+    ev.setUint32(12, centralSize, true);
+    ev.setUint32(16, centralStart, true);
+    ev.setUint16(20, 0, true);           // comment length
+    parts.push(eocd);
+    offset += eocd.length;
+
+    const out = new Uint8Array(offset);
+    let pos = 0;
+    for (const p of parts) { out.set(p, pos); pos += p.length; }
+    return out;
+  }
+
   const FETCH_CONCURRENCY = 4;
 
   // Fetch one file's bytes, retrying once on any failure (network blip,
@@ -392,15 +511,15 @@
       });
 
       downloadBtn.textContent = 'Zipping…';
-      // Photos and videos are already-compressed formats — running them
-      // through DEFLATE (the old level:6) bought almost no size reduction
-      // while costing real time and blocking the tab. Store-only (level 0)
-      // via the async API is dramatically faster and doesn't freeze the UI.
-      const zipped = await new Promise((resolve, reject) => {
-        fflate.zip(files, { level: 0 }, (err, data) => {
-          if (err) reject(err); else resolve(data);
-        });
-      });
+      // Photos and videos are already-compressed formats, so this only
+      // ever writes ZIP "stored" (uncompressed) entries — no DEFLATE, no
+      // third-party zip library needed (cdnjs quietly dropped fflate;
+      // relying on it here was a single point of failure for the whole
+      // feature). buildZipStore runs entirely in this tab, on the
+      // admin's own CPU, which has no equivalent of the Worker's CPU
+      // time limit that made the server-side version fail on anything
+      // but a tiny selection.
+      const zipped = buildZipStore(files);
 
       const blob = new Blob([zipped], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
