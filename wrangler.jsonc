@@ -11,8 +11,5 @@
       "binding": "PHOTOS_BUCKET",
       "bucket_name": "emilyandtomas-wedding-photos"
     }
-  ],
-  "limits": {
-    "cpu_ms": 30000
-  }
+  ]
 }
