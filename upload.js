@@ -225,12 +225,20 @@ function makeThumbnail(file) {
 // screen instead, which is still far better than the generic fallback
 // tile. Only a genuine load failure (or nothing decodable within the
 // overall timeout) falls all the way back to makeVideoFallbackThumbnail.
+//
+// The element is deliberately attached to the document (off-screen, not
+// display:none) instead of left detached — Safari in particular can
+// fail to ever fire 'loadeddata'/'seeked' on a <video> that was never
+// inserted into the page, which is what was silently sending most real
+// guest uploads (mobile Safari) straight to the fallback tile.
 function makeVideoThumbnail(file) {
   return new Promise((resolve, reject) => {
     const videoEl = document.createElement('video');
     videoEl.muted = true;
     videoEl.playsInline = true;
     videoEl.preload = 'auto';
+    videoEl.style.cssText = 'position:fixed; top:-9999px; left:-9999px; width:2px; height:2px; opacity:0.01; pointer-events:none;';
+    document.body.appendChild(videoEl);
     const objectUrl = URL.createObjectURL(file);
     let settled = false;
 
@@ -246,8 +254,13 @@ function makeVideoThumbnail(file) {
 
     const captureNow = () => {
       try {
-        const w = videoEl.videoWidth || THUMB_MAX_DIM;
-        const h = videoEl.videoHeight || THUMB_MAX_DIM;
+        // Don't fall back to THUMB_MAX_DIM here — that used to mask a
+        // video element with no decoded frame yet (videoWidth/Height
+        // both 0) by drawing its still-blank canvas as if it were a
+        // real capture, instead of correctly failing over to
+        // makeVideoFallbackThumbnail.
+        const w = videoEl.videoWidth, h = videoEl.videoHeight;
+        if (!w || !h) { finish(new Error('no video dimensions')); return; }
         const scale = Math.min(1, THUMB_MAX_DIM / Math.max(w, h));
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(w * scale));

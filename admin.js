@@ -119,12 +119,20 @@
   // first — but a stalled 'seeked' event (it doesn't reliably fire for
   // every codec/container) just means capturing whatever's already on
   // screen after a short wait, rather than failing outright.
+  //
+  // The element is deliberately attached to the document (off-screen,
+  // not display:none) rather than left detached — Safari in particular
+  // can fail to ever fire 'loadeddata'/'seeked' on a <video> that was
+  // never inserted into the page, which is what made this silently fail
+  // for most videos when run from a non-Chromium browser.
   function captureVideoFrameFromUrl(url) {
     return new Promise((resolve, reject) => {
       const videoEl = document.createElement('video');
       videoEl.muted = true;
       videoEl.playsInline = true;
       videoEl.preload = 'auto';
+      videoEl.style.cssText = 'position:fixed; top:-9999px; left:-9999px; width:2px; height:2px; opacity:0.01; pointer-events:none;';
+      document.body.appendChild(videoEl);
       let settled = false;
 
       const finish = (err, blob) => {
@@ -141,7 +149,7 @@
       const captureNow = () => {
         try {
           const w = videoEl.videoWidth, h = videoEl.videoHeight;
-          if (!w || !h) { finish(new Error('no video dimensions')); return; }
+          if (!w || !h) { finish(new Error('no video dimensions (readyState=' + videoEl.readyState + ')')); return; }
           const MAX_DIM = 480;
           const scale = Math.min(1, MAX_DIM / Math.max(w, h));
           const canvas = document.createElement('canvas');
@@ -156,7 +164,9 @@
         }
       };
 
-      const overallTimer = setTimeout(() => finish(new Error('video load timed out')), 20000);
+      const overallTimer = setTimeout(() => {
+        finish(new Error('video load timed out (readyState=' + videoEl.readyState + ', networkState=' + videoEl.networkState + ')'));
+      }, 20000);
       let seekTimer;
 
       videoEl.addEventListener('loadeddata', () => {
@@ -169,7 +179,10 @@
         seekTimer = setTimeout(captureNow, 2000);
         videoEl.addEventListener('seeked', () => { clearTimeout(seekTimer); captureNow(); }, { once: true });
       });
-      videoEl.addEventListener('error', () => finish(new Error('video load error')));
+      videoEl.addEventListener('error', () => {
+        const err = videoEl.error;
+        finish(new Error('video load error (code=' + (err && err.code) + ')'));
+      });
 
       videoEl.src = url;
     });
@@ -192,7 +205,8 @@
     const originalText = fixThumbsBtn.textContent;
     try {
       const videos = items.filter(i => i.isVideo);
-      let checked = 0, fixed = 0, failed = 0;
+      let checked = 0, fixed = 0;
+      const errors = [];
       for (const v of videos) {
         checked++;
         fixThumbsBtn.textContent = 'Checking ' + checked + '/' + videos.length + '…';
@@ -205,24 +219,37 @@
         }
         if (!broken) continue;
         fixThumbsBtn.textContent = 'Fixing ' + checked + '/' + videos.length + '…';
-        try {
-          const blob = await captureVideoFrameFromUrl(v.fullUrl);
-          await uploadThumbOverwrite(v.id, blob, v.guestName, v.originalName, v.takenAt);
+        // One retry — a stalled decode/seek on the first attempt
+        // sometimes just clears up on a fresh <video> element.
+        let lastErr = null;
+        let ok = false;
+        for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+          try {
+            const blob = await captureVideoFrameFromUrl(v.fullUrl);
+            await uploadThumbOverwrite(v.id, blob, v.guestName, v.originalName, v.takenAt);
+            ok = true;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        if (ok) {
           fixed++;
-        } catch (e) {
-          failed++;
+        } else {
+          errors.push(v.originalName + ': ' + String(lastErr && lastErr.message || lastErr));
         }
       }
       if (fixed > 0) {
         await loadPhotos();
         loadStorageUsage();
       }
-      alert(
-        'Checked ' + videos.length + ' video(s). Fixed ' + fixed + '.' +
-        (failed ? ' ' + failed + ' still failed — try again later.' : '')
-      );
+      let msg = 'Checked ' + videos.length + ' video(s). Fixed ' + fixed + '.';
+      if (errors.length) {
+        msg += '\n\n' + errors.length + ' still failed:\n' + errors.slice(0, 6).join('\n');
+        if (errors.length > 6) msg += '\n…and ' + (errors.length - 6) + ' more.';
+      }
+      alert(msg);
     } catch (e) {
-      alert('Video thumbnail fix failed — try again.');
+      alert('Video thumbnail fix failed — try again. (' + String(e && e.message || e) + ')');
     } finally {
       fixThumbsBtn.disabled = false;
       fixThumbsBtn.textContent = originalText;
