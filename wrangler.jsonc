@@ -7,6 +7,12 @@
     "binding": "ASSETS"
   },
   "r2_buckets": [
-    { "binding": "PHOTOS_BUCKET", "bucket_name": "emilyandtomas-wedding-photos" }
-  ]
+    {
+      "binding": "PHOTOS_BUCKET",
+      "bucket_name": "emilyandtomas-wedding-photos"
+    }
+  ],
+  "limits": {
+    "cpu_ms": 30000
+  }
 }
