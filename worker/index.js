@@ -34,10 +34,6 @@ function extForMime(mime) {
 // admin API call, so changing it takes effect on the next deploy.
 const ADMIN_PASSWORD = 'natrocks';
 
-// Bump this whenever thumbnails are regenerated in bulk (see thumbUrl
-// below) so stale, long-cached copies get evicted from browsers/CDN.
-const THUMB_CACHE_VERSION = 3;
-
 const PAGE_ROUTES = {
   '/': '/index.html',
   '/upload': '/upload.html',
@@ -189,11 +185,28 @@ async function handlePhotosList(request, env) {
   // object comes back with an empty customMetadata object. This was the
   // root cause of guest names / taken-at dates showing up missing in the
   // gallery even though they were being written correctly on upload.
-  const listed = await env.PHOTOS_BUCKET.list({
-    prefix: 'full/',
-    limit,
-    include: ['customMetadata'],
-  });
+  // Also list thumb/ so each item's thumbUrl can carry a cache-busting
+  // version tied to that specific thumbnail's own last-modified time.
+  // Thumbnails do get overwritten in place after upload (e.g. the video-
+  // thumbnail auto-repair below), and thumb/*.jpg is served with a long
+  // immutable cache header — without a version query param that changes
+  // whenever the bytes actually change, browsers/CDN would keep serving
+  // the old thumbnail forever. A hand-bumped global version constant was
+  // tried here before and caused a real bug: any request made between a
+  // deploy and the regeneration finishing would cache the still-stale
+  // content under the new version forever. Deriving the version from the
+  // object's own R2 upload timestamp instead means it can never be wrong
+  // — it simply reflects whenever that thumbnail was last actually written.
+  const [listed, thumbListed] = await Promise.all([
+    env.PHOTOS_BUCKET.list({ prefix: 'full/', limit, include: ['customMetadata'] }),
+    env.PHOTOS_BUCKET.list({ prefix: 'thumb/', limit }),
+  ]);
+
+  const thumbUploadedById = new Map();
+  for (const obj of thumbListed.objects) {
+    const id = obj.key.slice('thumb/'.length).replace(/\.[a-zA-Z0-9]+$/, '');
+    thumbUploadedById.set(id, obj.uploaded);
+  }
 
   const items = listed.objects.map(obj => {
     // Full-res keys can now carry any extension (jpg/mp4/mov/...), so
@@ -205,13 +218,11 @@ async function handlePhotosList(request, env) {
     // the file's own last-modified time for videos), falling back to
     // upload time when neither is available.
     const sortTime = meta.takenAt || uploadedAt;
+    const thumbUploaded = thumbUploadedById.get(id);
+    const thumbVersion = thumbUploaded ? new Date(thumbUploaded).getTime() : 0;
     return {
       id,
-      // ?v= busts the long immutable browser/CDN cache on thumb/*.jpg
-      // whenever a thumbnail's actual bytes are replaced in place (e.g.
-      // the one-time video-thumbnail backfill) — bump THUMB_CACHE_VERSION
-      // if thumbnails are ever bulk-regenerated again.
-      thumbUrl: `/photos/thumb/${id}.jpg?v=${THUMB_CACHE_VERSION}`,
+      thumbUrl: `/photos/thumb/${id}.jpg?v=${thumbVersion}`,
       // Use the real stored key so the extension always matches what's
       // actually in the bucket (thumb is always .jpg; full varies).
       fullUrl: `/photos/${obj.key}`,

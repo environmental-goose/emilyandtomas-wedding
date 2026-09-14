@@ -12,6 +12,7 @@
   const selectionCount = document.getElementById('selectionCount');
   const downloadBtn = document.getElementById('downloadBtn');
   const deleteBtn = document.getElementById('deleteBtn');
+  const fixThumbsBtn = document.getElementById('fixThumbsBtn');
 
   let password = sessionStorage.getItem(PASSWORD_KEY) || '';
   let items = [];
@@ -69,6 +70,164 @@
       storageUsageEl.textContent = '';
     }
   }
+
+  // ---- Video thumbnail auto-repair ----
+  // Guest phones generate video thumbnails client-side at upload time
+  // (see upload.js), but that decode-a-frame-from-a-<video>-element trick
+  // is inherently unreliable across the wide range of real phone codecs
+  // and mobile-browser quirks — when it fails, the upload silently keeps
+  // a plain flat-color placeholder image instead. This runs in a normal
+  // desktop browser (wherever admin is open), which reliably can decode
+  // these videos, and replaces any placeholder-flat thumbnail with a real
+  // captured frame. Safe to re-run any time — it only touches thumbnails
+  // that are still flat, so already-fixed ones are left alone.
+  function isFlatImageData(data) {
+    const r0 = data[0], g0 = data[1], b0 = data[2];
+    // Sample every ~100th pixel rather than every single one — plenty to
+    // tell a real photo (lots of variation) apart from a solid-color fill.
+    for (let i = 4; i < data.length; i += 4 * 97) {
+      if (Math.abs(data[i] - r0) > 3 || Math.abs(data[i + 1] - g0) > 3 || Math.abs(data[i + 2] - b0) > 3) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function isBrokenVideoThumb(url) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          resolve(isFlatImageData(data));
+        } catch (e) {
+          resolve(false);
+        }
+      };
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+  }
+
+  // Decode the video's first frame via a hidden <video> element. Frame 0
+  // is often solid black/undecoded, so this nudges forward slightly
+  // first — but a stalled 'seeked' event (it doesn't reliably fire for
+  // every codec/container) just means capturing whatever's already on
+  // screen after a short wait, rather than failing outright.
+  function captureVideoFrameFromUrl(url) {
+    return new Promise((resolve, reject) => {
+      const videoEl = document.createElement('video');
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.preload = 'auto';
+      let settled = false;
+
+      const finish = (err, blob) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(overallTimer);
+        clearTimeout(seekTimer);
+        videoEl.removeAttribute('src');
+        videoEl.load();
+        videoEl.remove();
+        if (err) reject(err); else resolve(blob);
+      };
+
+      const captureNow = () => {
+        try {
+          const w = videoEl.videoWidth, h = videoEl.videoHeight;
+          if (!w || !h) { finish(new Error('no video dimensions')); return; }
+          const MAX_DIM = 480;
+          const scale = Math.min(1, MAX_DIM / Math.max(w, h));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(blob => {
+            if (blob) finish(null, blob); else finish(new Error('encode failed'));
+          }, 'image/jpeg', 0.82);
+        } catch (e) {
+          finish(e);
+        }
+      };
+
+      const overallTimer = setTimeout(() => finish(new Error('video load timed out')), 20000);
+      let seekTimer;
+
+      videoEl.addEventListener('loadeddata', () => {
+        try {
+          videoEl.currentTime = Math.min(0.2, (videoEl.duration || 1) / 2);
+        } catch (e) {
+          captureNow();
+          return;
+        }
+        seekTimer = setTimeout(captureNow, 2000);
+        videoEl.addEventListener('seeked', () => { clearTimeout(seekTimer); captureNow(); }, { once: true });
+      });
+      videoEl.addEventListener('error', () => finish(new Error('video load error')));
+
+      videoEl.src = url;
+    });
+  }
+
+  async function uploadThumbOverwrite(id, blob, guestName, originalName, takenAt) {
+    const fd = new FormData();
+    fd.append('kind', 'thumb');
+    fd.append('id', id);
+    fd.append('guestName', guestName);
+    fd.append('originalName', originalName);
+    if (takenAt) fd.append('takenAt', takenAt);
+    fd.append('file', blob, 'thumb.jpg');
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error('thumb upload failed: ' + res.status);
+  }
+
+  fixThumbsBtn.addEventListener('click', async () => {
+    fixThumbsBtn.disabled = true;
+    const originalText = fixThumbsBtn.textContent;
+    try {
+      const videos = items.filter(i => i.isVideo);
+      let checked = 0, fixed = 0, failed = 0;
+      for (const v of videos) {
+        checked++;
+        fixThumbsBtn.textContent = 'Checking ' + checked + '/' + videos.length + '…';
+        const cacheBustUrl = v.thumbUrl + (v.thumbUrl.includes('?') ? '&' : '?') + 'cb=' + Date.now();
+        let broken = false;
+        try {
+          broken = await isBrokenVideoThumb(cacheBustUrl);
+        } catch (e) {
+          broken = false;
+        }
+        if (!broken) continue;
+        fixThumbsBtn.textContent = 'Fixing ' + checked + '/' + videos.length + '…';
+        try {
+          const blob = await captureVideoFrameFromUrl(v.fullUrl);
+          await uploadThumbOverwrite(v.id, blob, v.guestName, v.originalName, v.takenAt);
+          fixed++;
+        } catch (e) {
+          failed++;
+        }
+      }
+      if (fixed > 0) {
+        await loadPhotos();
+        loadStorageUsage();
+      }
+      alert(
+        'Checked ' + videos.length + ' video(s). Fixed ' + fixed + '.' +
+        (failed ? ' ' + failed + ' still failed — try again later.' : '')
+      );
+    } catch (e) {
+      alert('Video thumbnail fix failed — try again.');
+    } finally {
+      fixThumbsBtn.disabled = false;
+      fixThumbsBtn.textContent = originalText;
+    }
+  });
 
   function render() {
     grid.innerHTML = '';
